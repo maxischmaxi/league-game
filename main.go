@@ -7,12 +7,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 var (
 	connections  []*Connection = []*Connection{}
 	game_texts   []GameText    = []GameText{}
+	games        []Game        = []Game{}
 	allowd_games []string      = []string{}
 )
 
@@ -48,6 +48,12 @@ type CreateGameRequest struct {
 	ModeratorUUID string `json:"uuid"`
 }
 
+type Game struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	ModeratorUUID string `json:"uuid"`
+}
+
 func GinMiddleware(allowOrigin []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", strings.Join(allowOrigin, ","))
@@ -67,14 +73,6 @@ func GinMiddleware(allowOrigin []string) gin.HandlerFunc {
 }
 
 func main() {
-	db, err := InitDatabase()
-
-	if err != nil {
-		log.Fatalf("Failed to open database: %s", err)
-	}
-
-	defer db.db.Close()
-
 	upgrader := websocket.Upgrader{}
 	router := gin.New()
 
@@ -101,12 +99,12 @@ func main() {
 
 		connections = append(connections, &con)
 
-		con.Listen(db)
+		con.Listen()
 	})
 	router.GET("/game/:id", func(c *gin.Context) {
 		id := c.Param("id")
 
-		game, err := db.GetGame(id)
+		game, err := GetGame(id)
 
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -122,12 +120,7 @@ func main() {
 			return
 		}
 
-		id, err := db.CreateGame(req.Name, req.ModeratorUUID)
-
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
+		id := CreateGame(req.Name, req.ModeratorUUID)
 
 		c.JSON(http.StatusOK, gin.H{
 			"id": id,

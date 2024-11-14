@@ -123,14 +123,7 @@ func (c *Connection) SetNick(msg SocketMessage) error {
 	return nil
 }
 
-func (c *Connection) JoinGame(msg SocketMessage, db *Database) error {
-	games, err := db.GetAllGames()
-
-	if err != nil {
-		log.Println("get games:", err)
-		return err
-	}
-
+func (c *Connection) JoinGame(msg SocketMessage) error {
 	found := false
 
 	for _, game := range games {
@@ -431,7 +424,7 @@ func (c *Connection) SendAllAnswersToModerator() error {
 	return nil
 }
 
-func (c *Connection) Listen(db *Database) {
+func (c *Connection) Listen() {
 	for {
 		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
@@ -461,7 +454,7 @@ func (c *Connection) Listen(db *Database) {
 				break
 			}
 		case "join_game":
-			err := c.JoinGame(msg, db)
+			err := c.JoinGame(msg)
 
 			if err != nil {
 				c.Remove()
