@@ -34,6 +34,7 @@ jobs:
       - name: deploy to Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          GIN_MODE: ${{ secrets.GIN_MODE }}
         run: |
           railway up --service ${{ secrets.RAILWAY_SERVICE }}
           

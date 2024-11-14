@@ -72,11 +72,19 @@ func GinMiddleware(allowOrigin []string) gin.HandlerFunc {
 	}
 }
 
+func Logging() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		log.Printf("%s %s %s %s", c.Request.Method, c.Request.URL, c.Request.Proto, c.Request.RemoteAddr)
+		c.Next()
+	}
+}
+
 func main() {
 	upgrader := websocket.Upgrader{}
 	router := gin.New()
 
 	router.Use(GinMiddleware([]string{"http://localhost:5173", "https://league-game.maximilian-jeschek.workers.dev", "https://league-game.jeschek-connect.dev"}))
+	router.Use(Logging())
 	router.GET("/ws", func(c *gin.Context) {
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
