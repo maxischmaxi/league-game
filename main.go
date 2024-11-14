@@ -3,8 +3,8 @@ package main
 import (
 	"log"
 	"net/http"
-	"strings"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -54,24 +54,6 @@ type Game struct {
 	ModeratorUUID string `json:"uuid"`
 }
 
-func GinMiddleware(allowOrigin []string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", strings.Join(allowOrigin, ","))
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, Content-Length, X-CSRF-Token, Token, session, Origin, Host, Connection, Accept-Encoding, Accept-Language, X-Requested-With")
-
-		if c.Request.Method == http.MethodOptions {
-			c.AbortWithStatus(http.StatusNoContent)
-			return
-		}
-
-		c.Request.Header.Del("Origin")
-
-		c.Next()
-	}
-}
-
 func Logging() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		log.Printf("%s %s %s %s", c.Request.Method, c.Request.URL, c.Request.Proto, c.Request.RemoteAddr)
@@ -83,8 +65,14 @@ func main() {
 	upgrader := websocket.Upgrader{}
 	router := gin.New()
 
-	router.Use(GinMiddleware([]string{"http://localhost:5173", "https://league-game.maximilian-jeschek.workers.dev", "https://league-game.jeschek-connect.dev"}))
 	router.Use(Logging())
+	router.Use(cors.New(cors.Config{
+		AllowOrigins:    []string{"*"},
+		AllowMethods:    []string{"GET", "POST", "PUT", "DELETE"},
+		AllowHeaders:    []string{"Origin", "Content-Length", "Content-Type", "Authorization"},
+		AllowWebSockets: true,
+		AllowFiles:      true,
+	}))
 	router.GET("/ws", func(c *gin.Context) {
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
