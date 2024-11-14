@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -47,9 +48,9 @@ type CreateGameRequest struct {
 	ModeratorUUID string `json:"uuid"`
 }
 
-func GinMiddleware(allowOrigin string) gin.HandlerFunc {
+func GinMiddleware(allowOrigin []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", allowOrigin)
+		c.Writer.Header().Set("Access-Control-Allow-Origin", strings.Join(allowOrigin, ","))
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, Content-Length, X-CSRF-Token, Token, session, Origin, Host, Connection, Accept-Encoding, Accept-Language, X-Requested-With")
@@ -77,7 +78,7 @@ func main() {
 	upgrader := websocket.Upgrader{}
 	router := gin.New()
 
-	router.Use(GinMiddleware("http://localhost:5173"))
+	router.Use(GinMiddleware([]string{"http://localhost:5173", "https://league-game.maximilian-jeschek.workers.dev", "https://league-game.jeschek-connect.dev"}))
 	router.GET("/ws", func(c *gin.Context) {
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
@@ -132,6 +133,7 @@ func main() {
 			"id": id,
 		})
 	})
+	router.Static("/app", "./public")
 
 	if err := router.Run(":8080"); err != nil {
 		log.Fatalf("Failed to run server: %s", err)
