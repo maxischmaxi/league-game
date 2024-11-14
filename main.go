@@ -133,7 +133,9 @@ func main() {
 			"id": id,
 		})
 	})
-	router.Static("/app", "./public")
+	router.Static("/assets", "./public/assets")
+	router.StaticFile("/", "./public/index.html")
+	router.StaticFile("/vite.svg", "./public/vite.svg")
 
 	if err := router.Run(":8080"); err != nil {
 		log.Fatalf("Failed to run server: %s", err)
