@@ -67,9 +67,9 @@ func main() {
 
 	router.Use(Logging())
 	router.Use(cors.New(cors.Config{
-		AllowOrigins:    []string{"*"},
+		AllowOrigins:    []string{"https://league-game.up.railway.app", "http://localhost:5173"},
 		AllowMethods:    []string{"GET", "POST", "PUT", "DELETE"},
-		AllowHeaders:    []string{"Origin", "Content-Length", "Content-Type", "Authorization"},
+		AllowHeaders:    []string{"Origin", "Content-Length", "Content-Type"},
 		AllowWebSockets: true,
 		AllowFiles:      true,
 	}))
