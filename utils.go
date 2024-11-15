@@ -41,7 +41,7 @@ func SendTextUpdateToAll(gameId string) {
 }
 
 func SendCanTypeToAll() {
-	payload, err := json.Marshal(allowd_games)
+	payload, err := json.Marshal(allowed_games)
 
 	if err != nil {
 		log.Println("marshal:", err)

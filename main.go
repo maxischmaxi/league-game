@@ -2,24 +2,26 @@ package main
 
 import (
 	"log"
-	"net/http"
-
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 )
 
 var (
-	connections  []*Connection = []*Connection{}
-	game_texts   []GameText    = []GameText{}
-	games        []Game        = []Game{}
-	allowd_games []string      = []string{}
+	connections   []*Connection = []*Connection{}
+	game_texts    []GameText    = []GameText{}
+	games         []Game        = []Game{}
+	allowed_games []string      = []string{}
+	previewed     []string      = []string{}
 )
 
 type AllAnswer struct {
-	UUID   string `json:"uuid"`
-	Nick   string `json:"nickname"`
-	Answer string `json:"answer"`
+	UUID           string `json:"uuid"`
+	Nick           string `json:"nickname"`
+	Answer         string `json:"answer"`
+	AnswerRevealed bool   `json:"answerRevealed"`
+}
+
+type SetPreviewdPayload struct {
+	GameId  string `json:"gameId"`
+	Preview bool   `json:"preview"`
 }
 
 type GameText struct {
@@ -54,79 +56,24 @@ type Game struct {
 	ModeratorUUID string `json:"uuid"`
 }
 
-func Logging() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		log.Printf("%s %s %s %s", c.Request.Method, c.Request.URL, c.Request.Proto, c.Request.RemoteAddr)
-		c.Next()
-	}
-}
-
 func main() {
-	upgrader := websocket.Upgrader{}
-	router := gin.New()
+	client, err := InitDatabase()
 
-	router.Use(Logging())
-	router.Use(cors.New(cors.Config{
-		AllowOrigins:    []string{"https://league-game.up.railway.app", "http://localhost:5173"},
-		AllowMethods:    []string{"GET", "POST", "PUT", "DELETE"},
-		AllowHeaders:    []string{"Origin", "Content-Length", "Content-Type"},
-		AllowWebSockets: true,
-		AllowFiles:      true,
-	}))
-	router.GET("/ws", func(c *gin.Context) {
-		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %s", err)
+	}
 
-		defer conn.Close()
-		log.Println("connected")
+	defer DisconnectDatabase(client)
 
-		con := Connection{
-			Conn:            conn,
-			GameId:          "",
-			UUID:            "",
-			Nick:            "",
-			IsModerator:     false,
-			Answer:          "",
-			AnswerRevielead: false,
-		}
+	router := NewServer(client)
 
-		connections = append(connections, &con)
-
-		con.Listen()
-	})
-	router.GET("/game/:id", func(c *gin.Context) {
-		id := c.Param("id")
-
-		game, err := GetGame(id)
-
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-
-		c.JSON(http.StatusOK, game)
-	})
-	router.POST("/game", func(c *gin.Context) {
-		var req CreateGameRequest
-		if err := c.BindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-
-		id := CreateGame(req.Name, req.ModeratorUUID)
-
-		c.JSON(http.StatusOK, gin.H{
-			"id": id,
-		})
-	})
+	router.GET("/ws", router.HandleWebsocket)
+	router.GET("/game/:id", router.GetGameById)
+	router.GET("/reset", router.Reset)
+	router.POST("/game", router.CreateGame)
 	router.Static("/assets", "./public/assets")
 	router.StaticFile("/", "./public/index.html")
 	router.StaticFile("/vite.svg", "./public/vite.svg")
 
-	if err := router.Run(":8080"); err != nil {
-		log.Fatalf("Failed to run server: %s", err)
-	}
+	router.RunWithLogs()
 }

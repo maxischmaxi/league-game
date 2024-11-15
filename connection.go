@@ -5,16 +5,17 @@ import (
 	"log"
 
 	"github.com/gorilla/websocket"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type Connection struct {
-	Conn            *websocket.Conn
-	UUID            string
-	GameId          string
-	Nick            string
-	AnswerRevielead bool
-	Answer          string
-	IsModerator     bool
+	Conn           *websocket.Conn
+	UUID           string
+	GameId         string
+	Nick           string
+	AnswerRevealed bool
+	Answer         string
+	IsModerator    bool
 }
 
 func (c *Connection) Remove() {
@@ -294,18 +295,18 @@ func (c *Connection) LeaveGame() {
 func (c *Connection) CanType(msg SocketMessage) {
 	found := false
 
-	for i, game := range allowd_games {
+	for i, game := range allowed_games {
 		if game == c.GameId {
 			found = true
 
 			if msg.Payload != "true" {
-				allowd_games = append(allowd_games[:i], allowd_games[i+1:]...)
+				allowed_games = append(allowed_games[:i], allowed_games[i+1:]...)
 			}
 		}
 	}
 
 	if !found && msg.Payload == "true" {
-		allowd_games = append(allowd_games, c.GameId)
+		allowed_games = append(allowed_games, c.GameId)
 	}
 
 	SendCanTypeToAll()
@@ -376,16 +377,34 @@ func (c *Connection) GetText() error {
 	return nil
 }
 
+func (c *Connection) HideAnswer(msg SocketMessage) {
+	for _, conn := range connections {
+		if conn.UUID == msg.Payload {
+			log.Printf("Moderator hid answer for player %s", conn.Nick)
+			conn.AnswerRevealed = false
+		}
+	}
+}
+
+func (c *Connection) RevealAnswer(msg SocketMessage) {
+	for _, conn := range connections {
+		if conn.UUID == msg.Payload {
+			log.Printf("Moderator revealed answer for player %s", conn.Nick)
+			conn.AnswerRevealed = true
+		}
+	}
+}
+
 func (c *Connection) SendAllAnswersToModerator() error {
 	allAnswers := []AllAnswer{}
 
 	for _, conn := range connections {
 		if !conn.IsModerator {
-			log.Printf("Player %s is not moderator, adding answer %s", conn.Nick, conn.Answer)
 			allAnswers = append(allAnswers, AllAnswer{
-				UUID:   conn.UUID,
-				Nick:   conn.Nick,
-				Answer: conn.Answer,
+				UUID:           conn.UUID,
+				Nick:           conn.Nick,
+				Answer:         conn.Answer,
+				AnswerRevealed: conn.AnswerRevealed,
 			})
 		}
 	}
@@ -424,7 +443,66 @@ func (c *Connection) SendAllAnswersToModerator() error {
 	return nil
 }
 
-func (c *Connection) Listen() {
+func (c *Connection) BroadcastPreviewedGames() error {
+	previewedPayload, err := json.Marshal(previewed)
+
+	if err != nil {
+		log.Println("marshal:", err)
+		return err
+	}
+
+	answer := SocketMessage{
+		Type:    "previewed_games",
+		Payload: string(previewedPayload),
+	}
+
+	data, err := json.Marshal(answer)
+
+	if err != nil {
+		log.Println("marshal:", err)
+		return err
+	}
+
+	for _, conn := range connections {
+		err := conn.Conn.WriteMessage(websocket.TextMessage, []byte(data))
+
+		if err != nil {
+			log.Println("write:", err)
+		}
+	}
+
+	return nil
+}
+
+func (c *Connection) SetPreviewed(msg SocketMessage) error {
+	var payload SetPreviewdPayload
+
+	err := json.Unmarshal([]byte(msg.Payload), &payload)
+
+	if err != nil {
+		log.Println("unmarshal:", err)
+		return err
+	}
+
+	if payload.Preview {
+		for _, id := range previewed {
+			if id == payload.GameId {
+				return nil
+			}
+		}
+	} else {
+		for i, id := range previewed {
+			if id == payload.GameId {
+				previewed = append(previewed[:i], previewed[i+1:]...)
+				break
+			}
+		}
+	}
+
+	return nil
+}
+
+func (c *Connection) Listen(database *mongo.Client) {
 	for {
 		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
@@ -444,6 +522,20 @@ func (c *Connection) Listen() {
 		}
 
 		switch msg.Type {
+		case "set_preview":
+			err := c.SetPreviewed(msg)
+
+			if err != nil {
+				c.Remove()
+				break
+			}
+
+			err = c.BroadcastPreviewedGames()
+
+			if err != nil {
+				c.Remove()
+				break
+			}
 		case "leave_game":
 			c.LeaveGame()
 		case "get_text":
@@ -480,6 +572,24 @@ func (c *Connection) Listen() {
 			}
 		case "set_text":
 			err := c.SetText(msg)
+
+			if err != nil {
+				c.Remove()
+				break
+			}
+		case "set_answer_visible":
+			c.RevealAnswer(msg)
+
+			err := c.SendAllAnswersToModerator()
+
+			if err != nil {
+				c.Remove()
+				break
+			}
+		case "set_answer_invisible":
+			c.HideAnswer(msg)
+
+			err := c.SendAllAnswersToModerator()
 
 			if err != nil {
 				c.Remove()
