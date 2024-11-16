@@ -2,14 +2,12 @@ package main
 
 import (
 	"log"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 var (
-	connections   []*Connection = []*Connection{}
-	game_texts    []GameText    = []GameText{}
-	games         []Game        = []Game{}
-	allowed_games []string      = []string{}
-	previewed     []string      = []string{}
+	connections []*Connection = []*Connection{}
 )
 
 type AllAnswer struct {
@@ -24,36 +22,41 @@ type SetPreviewdPayload struct {
 	Preview bool   `json:"preview"`
 }
 
-type GameText struct {
-	Text   string `json:"text"`
-	GameId string `json:"gameId"`
-}
-
-type Answer struct {
-	Answer string `json:"answer"`
-	GameId string `json:"gameId"`
-}
-
 type SocketMessage struct {
 	Type    string `json:"type"`
 	Payload string `json:"payload"`
 }
 
 type Player struct {
-	UUID   string `json:"uuid"`
-	Nick   string `json:"nickname"`
-	GameId string `json:"gameId"`
-}
-
-type CreateGameRequest struct {
-	Name          string `json:"name"`
-	ModeratorUUID string `json:"uuid"`
+	ID       primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Nickname string             `json:"nickname"`
 }
 
 type Game struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	ModeratorUUID string `json:"uuid"`
+	ID            primitive.ObjectID   `bson:"_id,omitempty" json:"id"`
+	Name          string               `bson:"name" json:"name"`
+	ModeratorUUID primitive.ObjectID   `bson:"moderatorId" json:"moderatorId"`
+	Players       []primitive.ObjectID `bson:"players" json:"players"`
+}
+
+type GameRound struct {
+	ID       primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	GameID   primitive.ObjectID `bson:"gameId" json:"gameId"`
+	Round    int                `bson:"round" json:"round"`
+	Active   bool               `bson:"active" json:"active"`
+	Question string             `bson:"question" json:"question"`
+	Answers  []Answer           `bson:"answers" json:"answers"`
+	Started  bool               `bson:"started" json:"started"`
+	Ended    bool               `bson:"ended" json:"ended"`
+}
+
+type Answer struct {
+	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	GameID            primitive.ObjectID `bson:"gameId" json:"gameId"`
+	PlayerID          primitive.ObjectID `bson:"playerId" json:"playerId"`
+	RoundID           primitive.ObjectID `bson:"roundId" json:"roundId"`
+	Text              string             `bson:"text" json:"text"`
+	RevealedToPlayers bool               `bson:"revealedToPlayers" json:"revealedToPlayers"`
 }
 
 func main() {
@@ -69,8 +72,6 @@ func main() {
 
 	router.GET("/ws", router.HandleWebsocket)
 	router.GET("/game/:id", router.GetGameById)
-	router.GET("/reset", router.Reset)
-	router.POST("/game", router.CreateGame)
 	router.Static("/assets", "./public/assets")
 	router.StaticFile("/", "./public/index.html")
 	router.StaticFile("/vite.svg", "./public/vite.svg")

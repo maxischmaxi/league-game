@@ -8,6 +8,8 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -51,47 +53,32 @@ func NewServer(client *mongo.Client) *Server {
 }
 
 func (s *Server) GetGameById(c *gin.Context) {
-	id := c.Param("id")
+	idParam := c.Param("id")
 
-	game, err := GetGame(id)
+	if idParam == "" {
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+
+	id, err := primitive.ObjectIDFromHex(idParam)
+
+	if err != nil {
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+
+	coll := s.Database.Database("league").Collection("games")
+	filter := bson.D{{Key: "_id", Value: id}}
+	var result Game
+
+	err = coll.FindOne(c, filter).Decode(&result)
 
 	if err != nil {
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
 
-	c.JSON(http.StatusOK, game)
-}
-
-func (s *Server) Reset(c *gin.Context) {
-	for _, conn := range connections {
-		err := conn.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-
-		if err != nil {
-			log.Println("write:", err)
-		}
-	}
-
-	connections = []*Connection{}
-
-	games = []Game{}
-	game_texts = []GameText{}
-	allowed_games = []string{}
-}
-
-func (s *Server) CreateGame(c *gin.Context) {
-	var req CreateGameRequest
-
-	if err := c.BindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	id := CreateGame(req.Name, req.ModeratorUUID)
-
-	c.JSON(http.StatusOK, gin.H{
-		"id": id,
-	})
+	c.JSON(http.StatusOK, result)
 }
 
 func (s *Server) RunWithLogs() {
@@ -116,13 +103,8 @@ func (s *Server) HandleWebsocket(c *gin.Context) {
 	log.Println("connected")
 
 	con := Connection{
-		Conn:           conn,
-		GameId:         "",
-		UUID:           "",
-		Nick:           "",
-		IsModerator:    false,
-		Answer:         "",
-		AnswerRevealed: false,
+		Conn:     conn,
+		PlayerID: nil,
 	}
 
 	connections = append(connections, &con)
