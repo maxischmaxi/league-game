@@ -473,14 +473,13 @@ func (c *Connection) SendConnectedPlayers(client *mongo.Client) error {
 
 type SayHelloPayload struct {
 	Name string `json:"name"`
-	UUID string `json:"uuid,omitempty"`
+	UUID string `json:"uuid"`
 }
 
 func (c *Connection) SayHello(msg SocketMessage, client *mongo.Client) error {
 	var payload SayHelloPayload
 
 	err := json.Unmarshal([]byte(msg.Payload), &payload)
-
 	if err != nil {
 		log.Println("unmarshal:", err)
 		return err
@@ -591,18 +590,19 @@ func (c *Connection) SayHello(msg SocketMessage, client *mongo.Client) error {
 	}
 
 	coll := client.Database("league").Collection("players")
+	id := primitive.NewObjectID()
 	newPlayer := Player{
 		Nickname: payload.Name,
+		ID:       id,
 	}
 
-	result, err := coll.InsertOne(context.TODO(), newPlayer)
-
+	_, err = coll.InsertOne(context.TODO(), newPlayer)
 	if err != nil {
 		log.Println("insert one:", err)
 		return err
 	}
 
-	id := result.InsertedID.(primitive.ObjectID)
+	c.PlayerID = &id
 
 	answer := SocketMessage{
 		Type:    "set_uuid",
@@ -902,7 +902,7 @@ func (c *Connection) CreateGame(msg SocketMessage, client *mongo.Client) error {
 	player, err := c.GetPlayer(client)
 
 	if err != nil {
-		log.Println("get player:", err)
+		log.Println("CREATE_GAME: get player:", err)
 		return err
 	}
 
@@ -912,6 +912,7 @@ func (c *Connection) CreateGame(msg SocketMessage, client *mongo.Client) error {
 		Name:          msg.Payload,
 		Players:       []primitive.ObjectID{},
 		ModeratorUUID: player.ID,
+		ID:            primitive.NewObjectID(),
 	}
 
 	result, err := coll.InsertOne(context.TODO(), game)
@@ -922,6 +923,7 @@ func (c *Connection) CreateGame(msg SocketMessage, client *mongo.Client) error {
 	}
 
 	round := GameRound{
+		ID:       primitive.NewObjectID(),
 		GameID:   result.InsertedID.(primitive.ObjectID),
 		Active:   true,
 		Round:    1,
@@ -1088,13 +1090,6 @@ func (c *Connection) SendAllGames(client *mongo.Client) error {
 }
 
 func (c *Connection) SendAllRounds(client *mongo.Client) error {
-	_, err := c.GetPlayer(client)
-
-	if err != nil {
-		log.Println("get player:", err)
-		return err
-	}
-
 	game, err := c.GetActiveGame(client)
 
 	if err != nil {
@@ -1162,13 +1157,6 @@ func (c *Connection) SendAllRounds(client *mongo.Client) error {
 }
 
 func (c *Connection) SendCurrentRound(client *mongo.Client) error {
-	_, err := c.GetPlayer(client)
-
-	if err != nil {
-		log.Println("get player:", err)
-		return err
-	}
-
 	game, err := c.GetActiveGame(client)
 
 	if err != nil {
