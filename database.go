@@ -5,16 +5,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/joho/godotenv"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 func InitDatabase() (*mongo.Client, error) {
-	if err := godotenv.Load(); err != nil {
-		return nil, err
-	}
-
 	uri := os.Getenv("MONGODB_URI")
 	if uri == "" {
 		return nil, fmt.Errorf("MONGODB_URI is not set")
