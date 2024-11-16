@@ -393,7 +393,7 @@ func (c *Connection) GetActiveGame(client *mongo.Client) (*Game, error) {
 func (c *Connection) SendConnectedPlayers(client *mongo.Client) error {
 	game, err := c.GetActiveGame(client)
 	if err != nil {
-		log.Println("get active game:", err)
+		log.Println("SEND_CONNECTED_PLAYERS: get active game:", err)
 		return err
 	}
 
@@ -841,6 +841,55 @@ func (c *Connection) LeaveGame(msg SocketMessage, client *mongo.Client) error {
 		if err != nil {
 			log.Println("write:", err)
 		}
+	}
+
+	gamesColl := client.Database("league").Collection("games")
+	cur, err := gamesColl.Find(context.TODO(), bson.D{})
+
+	if err != nil {
+		log.Println("find:", err)
+		return err
+	}
+
+	var games []Game
+
+	for cur.Next(context.Background()) {
+		var game Game
+		err := cur.Decode(&game)
+
+		if err != nil {
+			log.Println("decode:", err)
+			continue
+		}
+
+		games = append(games, game)
+	}
+
+	if len(games) == 0 {
+		games = []Game{}
+	}
+
+	data, err = json.Marshal(games)
+	if err != nil {
+		log.Println("marshal:", err)
+		return err
+	}
+
+	answer = SocketMessage{
+		Type:    "get_games",
+		Payload: string(data),
+	}
+
+	data, err = json.Marshal(answer)
+	if err != nil {
+		log.Println("marshal:", err)
+		return err
+	}
+
+	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(data))
+	if err != nil {
+		log.Println("write:", err)
+		return err
 	}
 
 	return nil
@@ -1508,6 +1557,88 @@ func (c *Connection) DeleteAnswer(msg SocketMessage, client *mongo.Client) error
 	return nil
 }
 
+func (c *Connection) DeleteGame(msg SocketMessage, client *mongo.Client) error {
+	gameId, err := primitive.ObjectIDFromHex(msg.Payload)
+	if err != nil {
+		log.Println("object id from hex:", err)
+		return err
+	}
+
+	player, err := c.GetPlayer(client)
+	if err != nil {
+		log.Println("get player:", err)
+		return err
+	}
+
+	coll := client.Database("league").Collection("games")
+	filter := bson.D{{Key: "_id", Value: gameId}}
+
+	var game Game
+	err = coll.FindOne(context.TODO(), filter).Decode(&game)
+	if err != nil {
+		log.Println("find one:", err)
+		return err
+	}
+
+	if game.ModeratorUUID != player.ID {
+		return fmt.Errorf("player is not moderator")
+	}
+
+	_, err = coll.DeleteOne(context.TODO(), filter)
+	if err != nil {
+		log.Println("delete one:", err)
+		return err
+	}
+
+	roundsColl := client.Database("league").Collection("rounds")
+	filter = bson.D{{Key: "gameId", Value: gameId}}
+
+	_, err = roundsColl.DeleteMany(context.TODO(), filter)
+	if err != nil {
+		log.Println("delete many:", err)
+		return err
+	}
+
+	answerColl := client.Database("league").Collection("answers")
+	filter = bson.D{{Key: "gameId", Value: gameId}}
+
+	_, err = answerColl.DeleteMany(context.TODO(), filter)
+	if err != nil {
+		log.Println("delete many:", err)
+		return err
+	}
+
+	msg = SocketMessage{
+		Type:    "game_deleted",
+		Payload: gameId.Hex(),
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Println("marshal:", err)
+		return err
+	}
+
+	for _, conn := range connections {
+		if conn.PlayerID == nil {
+			continue
+		}
+
+		err = conn.Conn.WriteMessage(websocket.TextMessage, []byte(data))
+		if err != nil {
+			log.Println("write:", err)
+			continue
+		}
+
+		err := conn.SendAllGames(client)
+		if err != nil {
+			log.Println("send all games:", err)
+		}
+	}
+
+	return nil
+}
+
 func (c *Connection) Listen(client *mongo.Client) {
 	for {
 		_, message, err := c.Conn.ReadMessage()
@@ -1618,7 +1749,12 @@ func (c *Connection) Listen(client *mongo.Client) {
 			}
 		case "delete_answer":
 			err := c.DeleteAnswer(msg, client)
-
+			if err != nil {
+				c.Remove(client)
+				break
+			}
+		case "delete_game":
+			err := c.DeleteGame(msg, client)
 			if err != nil {
 				c.Remove(client)
 				break
