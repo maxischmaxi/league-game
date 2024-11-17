@@ -111,3 +111,20 @@ func (s *Server) HandleWebsocket(c *gin.Context) {
 
 	con.Listen(s.Database)
 }
+
+type HelloBody struct {
+	Nickname string `json:"nickname"`
+	UUID     string `json:"uuid"`
+}
+
+type HelloResponse struct {
+	UUID             string      `json:"uuid"`
+	Nickname         string      `json:"nickname"`
+	Games            []Game      `json:"games"`
+	ConnectedPlayers []Player    `json:"connectedPlayers"`
+	Rounds           []GameRound `json:"rounds"`
+	Round            GameRound   `json:"round"`
+	Text             string      `json:"text"`
+	Game             Game        `json:"game"`
+	Answers          []Answer    `json:"answers"`
+}

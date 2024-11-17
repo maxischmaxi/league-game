@@ -81,59 +81,7 @@ func (c *Connection) Remove(client *mongo.Client) {
 	}
 }
 
-func (c *Connection) JoinGame(msg SocketMessage, client *mongo.Client) error {
-	player, err := c.GetPlayer(client)
-	if err != nil {
-		log.Println("get player:", err)
-		return err
-	}
-
-	coll := client.Database("league").Collection("games")
-	id, err := primitive.ObjectIDFromHex(msg.Payload)
-	if err != nil {
-		log.Println("object id from hex:", err)
-		return err
-	}
-
-	filter := bson.D{{Key: "_id", Value: id}}
-	var game Game
-
-	err = coll.FindOne(context.TODO(), filter).Decode(&game)
-	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			answer := SocketMessage{
-				Type:    "join_game",
-				Payload: "false",
-			}
-
-			data, err := json.Marshal(answer)
-			if err != nil {
-				log.Println("marshal:", err)
-				return err
-			}
-
-			err = c.Conn.WriteMessage(websocket.TextMessage, []byte(data))
-			if err != nil {
-				log.Println("write:", err)
-				return err
-			}
-
-			return nil
-		}
-
-		log.Println("find one:", err)
-		return err
-	}
-
-	players := append(game.Players, *c.PlayerID)
-	update := bson.D{{Key: "$set", Value: bson.D{{Key: "players", Value: players}}}}
-
-	_, err = coll.UpdateOne(context.TODO(), filter, update)
-	if err != nil {
-		log.Println("update one:", err)
-		return err
-	}
-
+func (c *Connection) SendJoinSuccess(game Game) error {
 	data, err := json.Marshal(game)
 	if err != nil {
 		log.Println("marshal:", err)
@@ -157,7 +105,11 @@ func (c *Connection) JoinGame(msg SocketMessage, client *mongo.Client) error {
 		return err
 	}
 
-	data, err = json.Marshal(player)
+	return nil
+}
+
+func (c *Connection) SendPlayerConnectedToAll(game Game, player Player, client *mongo.Client) error {
+	data, err := json.Marshal(player)
 	if err != nil {
 		log.Println("marshal:", err)
 		return err
@@ -205,6 +157,74 @@ func (c *Connection) JoinGame(msg SocketMessage, client *mongo.Client) error {
 		}
 	}
 
+	return nil
+}
+
+func (c *Connection) HandleGameNotFound() error {
+
+	answer := SocketMessage{
+		Type:    "join_game",
+		Payload: "false",
+	}
+
+	data, err := json.Marshal(answer)
+	if err != nil {
+		log.Println("marshal:", err)
+		return err
+	}
+
+	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(data))
+	if err != nil {
+		log.Println("write:", err)
+		return err
+	}
+
+	return nil
+}
+
+func (c *Connection) JoinGame(msg SocketMessage, client *mongo.Client) error {
+	player, err := c.GetPlayer(client)
+	if err != nil {
+		log.Println("get player:", err)
+		return err
+	}
+
+	id, err := primitive.ObjectIDFromHex(msg.Payload)
+	if err != nil {
+		log.Println("object id from hex:", err)
+		return err
+	}
+
+	game, err := FindGameById(id, client)
+
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return c.HandleGameNotFound()
+		}
+
+		log.Println("find one:", err)
+		return err
+	}
+
+	players := append(game.Players, *c.PlayerID)
+	err = UpdateGamePlayers(game.ID, players, client)
+	if err != nil {
+		log.Println("update game players:", err)
+		return err
+	}
+
+	err = c.SendJoinSuccess(*game)
+	if err != nil {
+		log.Println("send join success:", err)
+		return err
+	}
+
+	err = c.SendPlayerConnectedToAll(*game, *player, client)
+	if err != nil {
+		log.Println("send player connected to all:", err)
+		return err
+	}
+
 	return c.SendAllAnswers(client)
 }
 
@@ -221,31 +241,10 @@ func (c *Connection) SendAllAnswers(client *mongo.Client) error {
 		return err
 	}
 
-	coll := client.Database("league").Collection("answers")
-	filter := bson.D{{Key: "gameId", Value: game.ID}, {Key: "roundId", Value: round.ID}}
-
-	var answers []Answer
-
-	cur, err := coll.Find(context.TODO(), filter)
+	answers, err := FindAllAnswersByGameAndRound(game.ID, round.ID, client)
 	if err != nil {
-		log.Println("find:", err)
+		log.Println("find all answers by game and round:", err)
 		return err
-	}
-
-	for cur.Next(context.Background()) {
-		var answer Answer
-		err := cur.Decode(&answer)
-
-		if err != nil {
-			log.Println("decode:", err)
-			continue
-		}
-
-		answers = append(answers, answer)
-	}
-
-	if len(answers) == 0 {
-		answers = []Answer{}
 	}
 
 	data, err := json.Marshal(answers)
@@ -304,19 +303,14 @@ func (c *Connection) GetActiveRound(client *mongo.Client) (*GameRound, error) {
 		return nil, err
 	}
 
-	coll := client.Database("league").Collection("rounds")
-	filter := bson.D{{Key: "active", Value: true}, {Key: "gameId", Value: game.ID}}
-
-	var round GameRound
-
-	err = coll.FindOne(context.TODO(), filter).Decode(&round)
+	round, err := FindActiveRoundByGameId(game.ID, client)
 
 	if err != nil {
 		log.Println("find one:", err)
 		return nil, err
 	}
 
-	return &round, nil
+	return round, nil
 }
 
 func (c *Connection) GetActiveGame(client *mongo.Client) (*Game, error) {
