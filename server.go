@@ -8,18 +8,14 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type Server struct {
 	*gin.Engine
 	Upgrader websocket.Upgrader
-	Database *mongo.Client
 }
 
-func NewServer(client *mongo.Client) *Server {
+func NewServer() *Server {
 	server := gin.New()
 
 	server.Use(cors.New(cors.Config{
@@ -48,37 +44,25 @@ func NewServer(client *mongo.Client) *Server {
 				return false
 			},
 		},
-		client,
 	}
 }
 
 func (s *Server) GetGameById(c *gin.Context) {
-	idParam := c.Param("id")
+	id := c.Param("id")
 
-	if idParam == "" {
+	if id == "" {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
 
-	id, err := primitive.ObjectIDFromHex(idParam)
-
-	if err != nil {
-		c.AbortWithStatus(http.StatusBadRequest)
-		return
+	for _, g := range games {
+		if g.ID == id {
+			c.JSON(http.StatusOK, g)
+			return
+		}
 	}
 
-	coll := s.Database.Database("league").Collection("games")
-	filter := bson.D{{Key: "_id", Value: id}}
-	var result Game
-
-	err = coll.FindOne(c, filter).Decode(&result)
-
-	if err != nil {
-		c.AbortWithStatus(http.StatusNotFound)
-		return
-	}
-
-	c.JSON(http.StatusOK, result)
+	c.AbortWithStatus(http.StatusNotFound)
 }
 
 func (s *Server) RunWithLogs() {
@@ -109,7 +93,7 @@ func (s *Server) HandleWebsocket(c *gin.Context) {
 
 	connections = append(connections, &con)
 
-	con.Listen(s.Database)
+	con.Listen()
 }
 
 type HelloBody struct {

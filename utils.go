@@ -1,13 +1,8 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"log"
-
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
+	"fmt"
 )
 
 func ParseSocketMessage(data []byte) (SocketMessage, error) {
@@ -20,74 +15,56 @@ func ParseSocketMessage(data []byte) (SocketMessage, error) {
 	return message, nil
 }
 
-func UpdateGamePlayers(id primitive.ObjectID, players []primitive.ObjectID, client *mongo.Client) error {
-	coll := client.Database("league").Collection("games")
-	update := bson.D{{Key: "$set", Value: bson.D{{Key: "players", Value: players}}}}
-	filter := bson.D{{Key: "_id", Value: id}}
-
-	_, err := coll.UpdateOne(context.TODO(), filter, update)
-	if err != nil {
-		log.Println("update one:", err)
-		return err
-	}
-
-	return nil
-}
-
-func FindGameById(id primitive.ObjectID, client *mongo.Client) (*Game, error) {
-	coll := client.Database("league").Collection("games")
-	filter := bson.D{{Key: "_id", Value: id}}
-
-	var game Game
-	err := coll.FindOne(context.TODO(), filter).Decode(&game)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &game, nil
-}
-
-func FindAllAnswersByGameAndRound(gameId primitive.ObjectID, roundId primitive.ObjectID, client *mongo.Client) (*[]Answer, error) {
-	coll := client.Database("league").Collection("answers")
-	filter := bson.D{{Key: "gameId", Value: gameId}, {Key: "roundId", Value: roundId}}
-
-	var answers []Answer
-
-	cur, err := coll.Find(context.TODO(), filter)
-	if err != nil {
-		log.Println("find:", err)
-		return nil, err
-	}
-
-	for cur.Next(context.Background()) {
-		var answer Answer
-		err := cur.Decode(&answer)
-
-		if err != nil {
-			log.Println("decode:", err)
-			continue
+func UpdateGamePlayers(id string, players []string) error {
+	for _, g := range games {
+		if g.ID == id {
+			g.Players = players
+			return nil
 		}
-
-		answers = append(answers, answer)
 	}
-
-	if len(answers) == 0 {
-		answers = []Answer{}
-	}
-
-	return &answers, nil
+	return fmt.Errorf("game not found")
 }
 
-func FindActiveRoundByGameId(gameId primitive.ObjectID, client *mongo.Client) (*GameRound, error) {
-	coll := client.Database("league").Collection("rounds")
-	filter := bson.D{{Key: "active", Value: true}, {Key: "gameId", Value: gameId}}
-	var round GameRound
+func FindGameById(id string) (*Game, error) {
+	for _, g := range games {
+		if g.ID == id {
+			return g, nil
+		}
+	}
 
-	err := coll.FindOne(context.TODO(), filter).Decode(&round)
+	return nil, fmt.Errorf("game not found")
+}
+
+func FindAllAnswersByGameAndRound(gameId string, roundId string) (*[]Answer, error) {
+	res := []Answer{}
+
+	for _, a := range answers {
+		if a.GameID == gameId && a.RoundID == roundId {
+			res = append(res, *a)
+		}
+	}
+
+	return &res, nil
+}
+
+func FindActiveRoundByGameId(gameId string) (*GameRound, error) {
+	for _, r := range rounds {
+		if r.GameID == gameId && r.Active {
+			return r, nil
+		}
+	}
+
+	return nil, fmt.Errorf("round not found")
+}
+
+func Parse[T any](data []byte) (*T, error) {
+	var msg T
+
+	err := json.Unmarshal(data, &msg)
+
 	if err != nil {
 		return nil, err
 	}
 
-	return &round, nil
+	return &msg, nil
 }

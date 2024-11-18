@@ -1,44 +1,35 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type Connection struct {
 	Conn     *websocket.Conn
-	PlayerID *primitive.ObjectID
+	PlayerID *string
 }
 
-func (c *Connection) GetPlayer(client *mongo.Client) (*Player, error) {
+func (c *Connection) GetPlayer() (*Player, error) {
 	if c.PlayerID == nil {
 		return nil, fmt.Errorf("player id is nil")
 	}
 
-	var player Player
-
-	coll := client.Database("league").Collection("players")
-	filter := bson.M{"_id": c.PlayerID}
-
-	err := coll.FindOne(context.TODO(), filter).Decode(&player)
-
-	if err != nil {
-		log.Println("find one:", err)
-		return nil, err
+	for _, p := range players {
+		if p.ID == *c.PlayerID {
+			return p, nil
+		}
 	}
 
-	return &player, nil
+	return nil, fmt.Errorf("player not found")
 }
 
-func (c *Connection) Remove(client *mongo.Client) {
-	player, err := c.GetPlayer(client)
+func (c *Connection) Remove() {
+	player, err := c.GetPlayer()
 
 	if err != nil {
 		log.Println("get player:", err)
@@ -108,7 +99,7 @@ func (c *Connection) SendJoinSuccess(game Game) error {
 	return nil
 }
 
-func (c *Connection) SendPlayerConnectedToAll(game Game, player Player, client *mongo.Client) error {
+func (c *Connection) SendPlayerConnectedToAll(game Game, player Player) error {
 	data, err := json.Marshal(player)
 	if err != nil {
 		log.Println("marshal:", err)
@@ -131,7 +122,7 @@ func (c *Connection) SendPlayerConnectedToAll(game Game, player Player, client *
 			continue
 		}
 
-		player, err := conn.GetPlayer(client)
+		player, err := conn.GetPlayer()
 		if err != nil {
 			log.Println("get player:", err)
 			continue
@@ -182,32 +173,22 @@ func (c *Connection) HandleGameNotFound() error {
 	return nil
 }
 
-func (c *Connection) JoinGame(msg SocketMessage, client *mongo.Client) error {
-	player, err := c.GetPlayer(client)
+func (c *Connection) JoinGame(msg SocketMessage) error {
+	player, err := c.GetPlayer()
 	if err != nil {
 		log.Println("get player:", err)
 		return err
 	}
 
-	id, err := primitive.ObjectIDFromHex(msg.Payload)
-	if err != nil {
-		log.Println("object id from hex:", err)
-		return err
-	}
-
-	game, err := FindGameById(id, client)
+	game, err := FindGameById(msg.Payload)
 
 	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			return c.HandleGameNotFound()
-		}
-
 		log.Println("find one:", err)
 		return err
 	}
 
 	players := append(game.Players, *c.PlayerID)
-	err = UpdateGamePlayers(game.ID, players, client)
+	err = UpdateGamePlayers(game.ID, players)
 	if err != nil {
 		log.Println("update game players:", err)
 		return err
@@ -219,29 +200,29 @@ func (c *Connection) JoinGame(msg SocketMessage, client *mongo.Client) error {
 		return err
 	}
 
-	err = c.SendPlayerConnectedToAll(*game, *player, client)
+	err = c.SendPlayerConnectedToAll(*game, *player)
 	if err != nil {
 		log.Println("send player connected to all:", err)
 		return err
 	}
 
-	return c.SendAllAnswers(client)
+	return c.SendAllAnswers()
 }
 
-func (c *Connection) SendAllAnswers(client *mongo.Client) error {
-	game, err := c.GetActiveGame(client)
+func (c *Connection) SendAllAnswers() error {
+	game, err := c.GetActiveGame()
 	if err != nil {
 		log.Println("get active game:", err)
 		return err
 	}
 
-	round, err := c.GetActiveRound(client)
+	round, err := c.GetActiveRound()
 	if err != nil {
 		log.Println("get active round:", err)
 		return err
 	}
 
-	answers, err := FindAllAnswersByGameAndRound(game.ID, round.ID, client)
+	answers, err := FindAllAnswersByGameAndRound(game.ID, round.ID)
 	if err != nil {
 		log.Println("find all answers by game and round:", err)
 		return err
@@ -295,15 +276,15 @@ func (c *Connection) UnhandledMessage(msg SocketMessage) {
 	}
 }
 
-func (c *Connection) GetActiveRound(client *mongo.Client) (*GameRound, error) {
-	game, err := c.GetActiveGame(client)
+func (c *Connection) GetActiveRound() (*GameRound, error) {
+	game, err := c.GetActiveGame()
 
 	if err != nil {
 		log.Println("get active game:", err)
 		return nil, err
 	}
 
-	round, err := FindActiveRoundByGameId(game.ID, client)
+	round, err := FindActiveRoundByGameId(game.ID)
 
 	if err != nil {
 		log.Println("find one:", err)
@@ -313,93 +294,64 @@ func (c *Connection) GetActiveRound(client *mongo.Client) (*GameRound, error) {
 	return round, nil
 }
 
-func (c *Connection) GetActiveGame(client *mongo.Client) (*Game, error) {
-	player, err := c.GetPlayer(client)
+func (c *Connection) GetActiveGame() (*Game, error) {
+	player, err := c.GetPlayer()
 
 	if err != nil {
 		log.Println("GetActiveGame: get player:", err)
 		return nil, err
 	}
 
-	coll := client.Database("league").Collection("games")
-	filter := bson.D{{Key: "players", Value: bson.D{{Key: "$in", Value: []primitive.ObjectID{player.ID}}}}}
-	var games []Game
-
-	cur, err := coll.Find(context.TODO(), filter)
-
-	if err != nil {
-		log.Println("find:", err)
-		return nil, err
-	}
-
-	for cur.Next(context.Background()) {
-		var game Game
-		err := cur.Decode(&game)
-
-		if err != nil {
-			log.Println("decode:", err)
-			continue
-		}
-
-		games = append(games, game)
-	}
-
-	if len(games) == 0 {
-		filter = bson.D{{Key: "moderatorId", Value: player.ID}}
-
-		cur, err = coll.Find(context.TODO(), filter)
-
-		if err != nil {
-			log.Println("find:", err)
-			return nil, err
-		}
-
-		for cur.Next(context.Background()) {
-			var game Game
-			err := cur.Decode(&game)
-
-			if err != nil {
-				log.Println("decode:", err)
-				continue
+	playerGames := []Game{}
+	for _, g := range games {
+		for _, p := range g.Players {
+			if p == player.ID {
+				playerGames = append(playerGames, *g)
 			}
+		}
+	}
 
-			games = append(games, game)
+	if len(playerGames) == 0 {
+		moderatorGames := []Game{}
+		for _, g := range games {
+			if g.ModeratorUUID == player.ID {
+				moderatorGames = append(moderatorGames, *g)
+			}
 		}
 
-		if len(games) == 0 {
+		if len(moderatorGames) == 0 {
 			return nil, fmt.Errorf("no active games")
 		}
 
-		if len(games) > 1 {
+		if len(moderatorGames) > 1 {
 			return nil, fmt.Errorf("multiple active games")
 		}
 
-		return &games[0], nil
+		return &moderatorGames[0], nil
 	}
 
-	if len(games) > 1 {
+	if len(playerGames) > 1 {
 		return nil, fmt.Errorf("multiple active games")
 	}
 
-	return &games[0], nil
+	return &playerGames[0], nil
 }
 
-func (c *Connection) SendConnectedPlayers(client *mongo.Client) error {
-	game, err := c.GetActiveGame(client)
+func (c *Connection) SendConnectedPlayers() error {
+	game, err := c.GetActiveGame()
 	if err != nil {
 		log.Println("SEND_CONNECTED_PLAYERS: get active game:", err)
 		return err
 	}
 
-	coll := client.Database("league").Collection("players")
-	filter := bson.D{}
+	playerIds := []string{}
 
 	for _, conn := range connections {
 		if conn.PlayerID == nil {
 			continue
 		}
 
-		g, err := conn.GetActiveGame(client)
+		g, err := conn.GetActiveGame()
 
 		if err != nil {
 			log.Println("get active game:", err)
@@ -410,34 +362,20 @@ func (c *Connection) SendConnectedPlayers(client *mongo.Client) error {
 			continue
 		}
 
-		filter = append(filter, bson.E{Key: "_id", Value: conn.PlayerID})
+		playerIds = append(playerIds, *conn.PlayerID)
 	}
 
-	cur, err := coll.Find(context.TODO(), filter)
+	selectedPlayers := []Player{}
 
-	if err != nil {
-		log.Println("find:", err)
-		return err
-	}
-
-	var players []Player
-
-	for cur.Next(context.Background()) {
-		var player Player
-		err := cur.Decode(&player)
-		if err != nil {
-			log.Println("decode:", err)
-			return err
+	for _, p := range players {
+		for _, id := range playerIds {
+			if p.ID == id {
+				selectedPlayers = append(selectedPlayers, *p)
+			}
 		}
-
-		players = append(players, player)
 	}
 
-	if len(players) == 0 {
-		players = []Player{}
-	}
-
-	payload, err := json.Marshal(players)
+	payload, err := json.Marshal(selectedPlayers)
 
 	if err != nil {
 		log.Println("marshal:", err)
@@ -470,7 +408,7 @@ type SayHelloPayload struct {
 	UUID string `json:"uuid"`
 }
 
-func (c *Connection) SayHello(msg SocketMessage, client *mongo.Client) error {
+func (c *Connection) SayHello(msg SocketMessage) error {
 	var payload SayHelloPayload
 
 	err := json.Unmarshal([]byte(msg.Payload), &payload)
@@ -480,69 +418,35 @@ func (c *Connection) SayHello(msg SocketMessage, client *mongo.Client) error {
 	}
 
 	if payload.UUID != "" {
-		playerId, err := primitive.ObjectIDFromHex(payload.UUID)
-
-		if err != nil {
-			log.Println("object id from hex:", err)
-			return err
-		}
-
-		filter := bson.D{{Key: "_id", Value: playerId}}
-		coll := client.Database("league").Collection("players")
-
 		var player Player
 
-		err = coll.FindOne(context.TODO(), filter).Decode(&player)
-
-		if err != nil {
-			log.Println("find one:", err)
-			return err
-		}
-
-		player.Nickname = payload.Name
-
-		update := bson.D{{Key: "$set", Value: bson.D{{Key: "nickname", Value: payload.Name}}}}
-		_, err = coll.UpdateOne(context.TODO(), filter, update)
-
-		if err != nil {
-			log.Println("update one:", err)
-			return err
-		}
-
-		c.PlayerID = &playerId
-
-		gamesColl := client.Database("league").Collection("games")
-		filter = bson.D{{Key: "players", Value: bson.D{{Key: "$in", Value: []primitive.ObjectID{playerId}}}}}
-
-		var games []Game
-
-		cur, err := gamesColl.Find(context.TODO(), filter)
-		if err != nil {
-			if err == mongo.ErrNoDocuments {
-				return nil
+		for _, p := range players {
+			if p.ID == payload.UUID {
+				p.Nickname = payload.Name
+				c.PlayerID = &payload.UUID
+				player = *p
+				break
 			}
-
-			log.Println("find:", err)
-			return err
 		}
 
-		for cur.Next(context.Background()) {
-			var game Game
-			err := cur.Decode(&game)
+		if player.ID == "" {
+			return fmt.Errorf("player not found")
+		}
 
-			if err != nil {
-				log.Println("decode:", err)
-				continue
+		playerGames := []Game{}
+		for _, g := range games {
+			for _, p := range g.Players {
+				if p == payload.UUID {
+					playerGames = append(playerGames, *g)
+				}
 			}
-
-			games = append(games, game)
 		}
 
-		if len(games) == 0 {
+		if len(playerGames) == 0 {
 			return nil
 		}
 
-		if len(games) > 1 {
+		if len(playerGames) > 1 {
 			return nil
 		}
 
@@ -583,24 +487,18 @@ func (c *Connection) SayHello(msg SocketMessage, client *mongo.Client) error {
 		return nil
 	}
 
-	coll := client.Database("league").Collection("players")
-	id := primitive.NewObjectID()
 	newPlayer := Player{
 		Nickname: payload.Name,
-		ID:       id,
+		ID:       uuid.New().String(),
 	}
 
-	_, err = coll.InsertOne(context.TODO(), newPlayer)
-	if err != nil {
-		log.Println("insert one:", err)
-		return err
-	}
+	players = append(players, &newPlayer)
 
-	c.PlayerID = &id
+	c.PlayerID = &newPlayer.ID
 
 	answer := SocketMessage{
 		Type:    "set_uuid",
-		Payload: id.Hex(),
+		Payload: newPlayer.ID,
 	}
 
 	data, err := json.Marshal(answer)
@@ -619,27 +517,30 @@ func (c *Connection) SayHello(msg SocketMessage, client *mongo.Client) error {
 	return nil
 }
 
-func (c *Connection) SetAnswer(msg SocketMessage, client *mongo.Client) error {
-	player, err := c.GetPlayer(client)
+func (c *Connection) SetAnswer(msg SocketMessage) error {
+	player, err := c.GetPlayer()
 	if err != nil {
 		log.Println("get player:", err)
 		return err
 	}
 
-	round, err := c.GetActiveRound(client)
+	round, err := c.GetActiveRound()
 
 	if err != nil {
 		log.Println("get active round:", err)
 		return err
 	}
 
-	answerColl := client.Database("league").Collection("answers")
-	filter := bson.D{{Key: "gameId", Value: round.GameID}, {Key: "playerId", Value: player.ID}, {Key: "roundId", Value: round.ID}}
+	found := false
+	for _, a := range answers {
+		if a.GameID == round.GameID && a.PlayerID == player.ID && round.ID == a.RoundID {
+			found = true
+			a.Text = msg.Payload
+			break
+		}
+	}
 
-	var answer Answer
-	err = answerColl.FindOne(context.TODO(), filter).Decode(&answer)
-
-	if err == mongo.ErrNoDocuments {
+	if !found {
 		newAnswer := Answer{
 			GameID:   round.GameID,
 			PlayerID: player.ID,
@@ -647,19 +548,14 @@ func (c *Connection) SetAnswer(msg SocketMessage, client *mongo.Client) error {
 			Text:     msg.Payload,
 		}
 
-		_, err = answerColl.InsertOne(context.TODO(), newAnswer)
-
-		if err != nil {
-			log.Println("insert one:", err)
-			return err
-		}
+		answers = append(answers, &newAnswer)
 
 		for _, conn := range connections {
 			if conn.PlayerID == nil {
 				continue
 			}
 
-			err := conn.SendAllAnswers(client)
+			err := conn.SendAllAnswers()
 
 			if err != nil {
 				log.Println("send all answers:", err)
@@ -669,26 +565,12 @@ func (c *Connection) SetAnswer(msg SocketMessage, client *mongo.Client) error {
 		return nil
 	}
 
-	if err != nil {
-		log.Println("find one:", err)
-		return err
-	}
-
-	update := bson.D{{Key: "$set", Value: bson.D{{Key: "text", Value: msg.Payload}}}}
-	filter = bson.D{{Key: "_id", Value: answer.ID}}
-
-	_, err = answerColl.UpdateOne(context.TODO(), filter, update)
-	if err != nil {
-		log.Println("update one:", err)
-		return err
-	}
-
 	for _, conn := range connections {
 		if conn.PlayerID == nil {
 			continue
 		}
 
-		err := conn.SendAllAnswers(client)
+		err := conn.SendAllAnswers()
 
 		if err != nil {
 			log.Println("send all answers:", err)
@@ -698,25 +580,18 @@ func (c *Connection) SetAnswer(msg SocketMessage, client *mongo.Client) error {
 	return nil
 }
 
-func (c *Connection) SetText(msg SocketMessage, client *mongo.Client) error {
-	round, err := c.GetActiveRound(client)
+func (c *Connection) SetText(msg SocketMessage) error {
+	round, err := c.GetActiveRound()
 
 	if err != nil {
 		log.Println("get active round:", err)
 		return err
 	}
 
-	round.Question = msg.Payload
-
-	coll := client.Database("league").Collection("rounds")
-	filter := bson.D{{Key: "_id", Value: round.ID}}
-	update := bson.D{{Key: "$set", Value: bson.D{{Key: "question", Value: msg.Payload}}}}
-
-	_, err = coll.UpdateOne(context.TODO(), filter, update)
-
-	if err != nil {
-		log.Println("update one:", err)
-		return err
+	for _, r := range rounds {
+		if r.ID == round.ID {
+			r.Question = msg.Payload
+		}
 	}
 
 	for _, conn := range connections {
@@ -724,7 +599,7 @@ func (c *Connection) SetText(msg SocketMessage, client *mongo.Client) error {
 			continue
 		}
 
-		err := conn.SendCurrentText(client)
+		err := conn.SendCurrentText()
 
 		if err != nil {
 			log.Println("send current text:", err)
@@ -734,12 +609,12 @@ func (c *Connection) SetText(msg SocketMessage, client *mongo.Client) error {
 	return nil
 }
 
-func (c *Connection) SendCurrentText(client *mongo.Client) error {
+func (c *Connection) SendCurrentText() error {
 	if c.PlayerID == nil {
 		return fmt.Errorf("player id is nil")
 	}
 
-	round, err := c.GetActiveRound(client)
+	round, err := c.GetActiveRound()
 
 	if err != nil {
 		log.Println("get active round:", err)
@@ -760,58 +635,28 @@ func (c *Connection) SendCurrentText(client *mongo.Client) error {
 	return c.Conn.WriteMessage(websocket.TextMessage, []byte(data))
 }
 
-func (c *Connection) LeaveGame(msg SocketMessage, client *mongo.Client) error {
-	gameId, err := primitive.ObjectIDFromHex(msg.Payload)
-
-	if err != nil {
-		log.Println("object id from hex:", err)
-		return err
-	}
-
-	player, err := c.GetPlayer(client)
+func (c *Connection) LeaveGame(msg SocketMessage) error {
+	player, err := c.GetPlayer()
 
 	if err != nil {
 		log.Println("get player:", err)
 		return err
 	}
 
-	coll := client.Database("league").Collection("games")
-	filter := bson.D{{Key: "_id", Value: gameId}}
-	var game Game
-
-	err = coll.FindOne(context.TODO(), filter).Decode(&game)
-
-	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			log.Printf("Player %s tried to leave non-existing game %s", player.Nickname, gameId)
-			return nil
-		}
-
-		log.Println("find one:", err)
-		return err
-	}
-
-	for i, p := range game.Players {
-		if p == player.ID {
-			game.Players = append(game.Players[:i], game.Players[i+1:]...)
-			break
+	for _, g := range games {
+		if g.ID == msg.Payload {
+			for i, p := range g.Players {
+				if p == player.ID {
+					g.Players = append(g.Players[:i], g.Players[i+1:]...)
+					break
+				}
+			}
 		}
 	}
-
-	update := bson.D{{Key: "$set", Value: bson.D{{Key: "players", Value: game.Players}}}}
-
-	_, err = coll.UpdateOne(context.TODO(), filter, update)
-
-	if err != nil {
-		log.Println("update one:", err)
-		return err
-	}
-
-	log.Printf("Player %s left game", player.Nickname)
 
 	answer := SocketMessage{
 		Type:    "leave_game",
-		Payload: player.ID.Hex(),
+		Payload: player.ID,
 	}
 
 	data, err := json.Marshal(answer)
@@ -835,32 +680,6 @@ func (c *Connection) LeaveGame(msg SocketMessage, client *mongo.Client) error {
 		if err != nil {
 			log.Println("write:", err)
 		}
-	}
-
-	gamesColl := client.Database("league").Collection("games")
-	cur, err := gamesColl.Find(context.TODO(), bson.D{})
-
-	if err != nil {
-		log.Println("find:", err)
-		return err
-	}
-
-	var games []Game
-
-	for cur.Next(context.Background()) {
-		var game Game
-		err := cur.Decode(&game)
-
-		if err != nil {
-			log.Println("decode:", err)
-			continue
-		}
-
-		games = append(games, game)
-	}
-
-	if len(games) == 0 {
-		games = []Game{}
 	}
 
 	data, err = json.Marshal(games)
@@ -901,21 +720,12 @@ type AnswerPayload struct {
 	RoundID string `json:"roundId"`
 }
 
-func ChangeAnswerVisibility(msg SocketMessage, client *mongo.Client, visible bool) error {
-	answerId, err := primitive.ObjectIDFromHex(msg.Payload)
-	if err != nil {
-		log.Println("object id from hex:", err)
-		return err
-	}
-
-	answerColl := client.Database("league").Collection("answers")
-	filter := bson.D{{Key: "_id", Value: answerId}}
-	update := bson.D{{Key: "$set", Value: bson.D{{Key: "revealedToPlayers", Value: visible}}}}
-	_, err = answerColl.UpdateOne(context.TODO(), filter, update)
-
-	if err != nil {
-		log.Println("update one:", err)
-		return err
+func ChangeAnswerVisibility(msg SocketMessage, visible bool) error {
+	for _, a := range answers {
+		if a.ID == msg.Payload {
+			a.RevealedToPlayers = visible
+			break
+		}
 	}
 
 	for _, conn := range connections {
@@ -923,7 +733,7 @@ func ChangeAnswerVisibility(msg SocketMessage, client *mongo.Client, visible boo
 			continue
 		}
 
-		err := conn.SendAllAnswers(client)
+		err := conn.SendAllAnswers()
 
 		if err != nil {
 			log.Println("send all answers:", err)
@@ -933,55 +743,41 @@ func ChangeAnswerVisibility(msg SocketMessage, client *mongo.Client, visible boo
 	return nil
 }
 
-func (c *Connection) HideAnswer(msg SocketMessage, client *mongo.Client) error {
-	return ChangeAnswerVisibility(msg, client, false)
+func (c *Connection) HideAnswer(msg SocketMessage) error {
+	return ChangeAnswerVisibility(msg, false)
 }
 
-func (c *Connection) RevealAnswer(msg SocketMessage, client *mongo.Client) error {
-	return ChangeAnswerVisibility(msg, client, true)
+func (c *Connection) RevealAnswer(msg SocketMessage) error {
+	return ChangeAnswerVisibility(msg, true)
 }
 
-func (c *Connection) CreateGame(msg SocketMessage, client *mongo.Client) error {
-	player, err := c.GetPlayer(client)
+func (c *Connection) CreateGame(msg SocketMessage) error {
+	player, err := c.GetPlayer()
 
 	if err != nil {
 		log.Println("CREATE_GAME: get player:", err)
 		return err
 	}
 
-	coll := client.Database("league").Collection("games")
-
 	game := Game{
 		Name:          msg.Payload,
-		Players:       []primitive.ObjectID{},
+		Players:       []string{},
 		ModeratorUUID: player.ID,
-		ID:            primitive.NewObjectID(),
+		ID:            uuid.New().String(),
 	}
 
-	result, err := coll.InsertOne(context.TODO(), game)
-
-	if err != nil {
-		log.Println("insert one:", err)
-		return err
-	}
+	games = append(games, &game)
 
 	round := GameRound{
-		ID:       primitive.NewObjectID(),
-		GameID:   result.InsertedID.(primitive.ObjectID),
+		ID:       uuid.New().String(),
+		GameID:   game.ID,
 		Active:   true,
 		Round:    1,
 		Answers:  []Answer{},
 		Question: "",
 	}
 
-	roundsColl := client.Database("league").Collection("rounds")
-
-	_, err = roundsColl.InsertOne(context.TODO(), round)
-
-	if err != nil {
-		log.Println("insert one:", err)
-		return err
-	}
+	rounds = append(rounds, &round)
 
 	data, err := json.Marshal(game)
 	if err != nil {
@@ -1013,13 +809,13 @@ func (c *Connection) CreateGame(msg SocketMessage, client *mongo.Client) error {
 			continue
 		}
 
-		err = c.SendAllGames(client)
+		err = c.SendAllGames()
 
 		if err != nil {
 			log.Println("send all games:", err)
 		}
 
-		err := conn.SendRound(client)
+		err := conn.SendRound()
 
 		if err != nil {
 			log.Println("send round:", err)
@@ -1029,81 +825,48 @@ func (c *Connection) CreateGame(msg SocketMessage, client *mongo.Client) error {
 	return nil
 }
 
-func (c *Connection) SendRound(client *mongo.Client) error {
-	game, err := c.GetActiveGame(client)
+func (c *Connection) SendRound() error {
+	game, err := c.GetActiveGame()
 	if err != nil {
 		log.Println("get active game:", err)
 		return err
 	}
 
-	coll := client.Database("league").Collection("rounds")
-	filter := bson.D{{Key: "active", Value: true}, {Key: "gameId", Value: game.ID}}
+	for _, r := range rounds {
+		if r.GameID == game.ID && r.Active {
+			data, err := json.Marshal(r)
+			if err != nil {
+				log.Println("marshal:", err)
+				return err
+			}
 
-	var round GameRound
+			answer := SocketMessage{
+				Type:    "get_round",
+				Payload: string(data),
+			}
 
-	err = coll.FindOne(context.TODO(), filter).Decode(&round)
+			responseData, err := json.Marshal(answer)
 
-	if err != nil {
-		log.Println("find one:", err)
-		return err
+			if err != nil {
+				log.Println("marshal:", err)
+				return err
+			}
+
+			err = c.Conn.WriteMessage(websocket.TextMessage, []byte(responseData))
+
+			if err != nil {
+				log.Println("write:", err)
+				return err
+			}
+
+			return nil
+		}
 	}
 
-	data, err := json.Marshal(round)
-
-	if err != nil {
-		log.Println("marshal:", err)
-		return err
-	}
-
-	answer := SocketMessage{
-		Type:    "get_round",
-		Payload: string(data),
-	}
-
-	responseData, err := json.Marshal(answer)
-
-	if err != nil {
-		log.Println("marshal:", err)
-		return err
-	}
-
-	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(responseData))
-
-	if err != nil {
-		log.Println("write:", err)
-		return err
-	}
-
-	return nil
+	return fmt.Errorf("round not found")
 }
 
-func (c *Connection) SendAllGames(client *mongo.Client) error {
-	coll := client.Database("league").Collection("games")
-	var games []Game
-
-	cur, err := coll.Find(context.TODO(), bson.D{})
-
-	if err != nil {
-		log.Println("find:", err)
-		return err
-	}
-
-	for cur.Next(context.Background()) {
-		var game Game
-		err := cur.Decode(&game)
-
-		if err != nil {
-			log.Println("decode:", err)
-			continue
-		}
-
-		games = append(games, game)
-	}
-
-	if len(games) == 0 {
-		games = []Game{}
-	}
-
+func (c *Connection) SendAllGames() error {
 	data, err := json.Marshal(games)
 	if err != nil {
 		log.Println("marshal:", err)
@@ -1132,45 +895,23 @@ func (c *Connection) SendAllGames(client *mongo.Client) error {
 	return nil
 }
 
-func (c *Connection) SendAllRounds(client *mongo.Client) error {
-	game, err := c.GetActiveGame(client)
+func (c *Connection) SendAllRounds() error {
+	game, err := c.GetActiveGame()
 
 	if err != nil {
 		log.Println("get active game:", err)
 		return err
 	}
 
-	roundsColl := client.Database("league").Collection("rounds")
+	responseRounds := []GameRound{}
 
-	filter := bson.D{{Key: "gameId", Value: game.ID}}
-
-	var rounds []GameRound
-
-	cur, err := roundsColl.Find(context.TODO(), filter)
-
-	if err != nil {
-
-		log.Println("find:", err)
-		return err
-	}
-
-	for cur.Next(context.Background()) {
-		var round GameRound
-		err := cur.Decode(&round)
-
-		if err != nil {
-			log.Println("decode:", err)
-			continue
+	for _, r := range rounds {
+		if r.GameID == game.ID {
+			responseRounds = append(responseRounds, *r)
 		}
-
-		rounds = append(rounds, round)
 	}
 
-	if len(rounds) == 0 {
-		rounds = []GameRound{}
-	}
-
-	data, err := json.Marshal(rounds)
+	data, err := json.Marshal(responseRounds)
 
 	if err != nil {
 		log.Println("marshal:", err)
@@ -1199,23 +940,11 @@ func (c *Connection) SendAllRounds(client *mongo.Client) error {
 	return nil
 }
 
-func (c *Connection) SendCurrentRound(client *mongo.Client) error {
-	game, err := c.GetActiveGame(client)
+func (c *Connection) SendCurrentRound() error {
+	round, err := c.GetActiveRound()
 
 	if err != nil {
-		log.Println("get active game:", err)
-		return err
-	}
-
-	roundsColl := client.Database("league").Collection("rounds")
-	filter := bson.D{{Key: "active", Value: true}, {Key: "gameId", Value: game.ID}}
-
-	var round GameRound
-
-	err = roundsColl.FindOne(context.TODO(), filter).Decode(&round)
-
-	if err != nil {
-		log.Println("find one:", err)
+		log.Println("get active round:", err)
 		return err
 	}
 
@@ -1253,8 +982,8 @@ type JoinGamePayload struct {
 	RoundID string `json:"roundId"`
 }
 
-func (c *Connection) GoNextRound(msg SocketMessage, client *mongo.Client) error {
-	player, err := c.GetPlayer(client)
+func (c *Connection) GoNextRound(msg SocketMessage) error {
+	player, err := c.GetPlayer()
 
 	if err != nil {
 		return err
@@ -1268,112 +997,90 @@ func (c *Connection) GoNextRound(msg SocketMessage, client *mongo.Client) error 
 		return err
 	}
 
-	gameId, err := primitive.ObjectIDFromHex(payload.GameID)
-	if err != nil {
-		return err
+	found := false
+	nextRound := 1
+
+	for _, g := range games {
+		if g.ID == payload.GameID && g.ModeratorUUID == player.ID {
+			for _, r := range rounds {
+				if r.ID == payload.RoundID {
+					r.Active = false
+					r.Ended = true
+					r.Started = false
+					nextRound = r.Round + 1
+					found = true
+					break
+				}
+			}
+		}
 	}
 
-	roundId, err := primitive.ObjectIDFromHex(payload.RoundID)
-	if err != nil {
-		return err
-	}
-
-	gamesColl := client.Database("league").Collection("games")
-	filter := bson.D{{Key: "_id", Value: gameId}}
-
-	var game Game
-	err = gamesColl.FindOne(context.TODO(), filter).Decode(&game)
-	if err != nil {
-		return err
-	}
-
-	if game.ModeratorUUID != player.ID {
-		return fmt.Errorf("player is not moderator")
-	}
-
-	roundsColl := client.Database("league").Collection("rounds")
-	filter = bson.D{{Key: "_id", Value: roundId}}
-
-	var round GameRound
-	err = roundsColl.FindOne(context.TODO(), filter).Decode(&round)
-	if err != nil {
-		return err
-	}
-
-	update := bson.D{{Key: "$set", Value: bson.D{{Key: "active", Value: false}, {Key: "ended", Value: true}, {Key: "started", Value: false}}}}
-	filter = bson.D{{Key: "_id", Value: roundId}}
-
-	_, err = roundsColl.UpdateOne(context.TODO(), filter, update)
-	if err != nil {
-		return err
+	if !found {
+		return fmt.Errorf("game not found")
 	}
 
 	newRound := GameRound{
-		GameID:   gameId,
+		GameID:   payload.GameID,
 		Active:   true,
 		Question: "",
 		Answers:  []Answer{},
-		Round:    round.Round + 1,
+		Round:    nextRound,
 		Started:  false,
 		Ended:    false,
 	}
 
-	_, err = roundsColl.InsertOne(context.TODO(), newRound)
-
-	if err != nil {
-		return err
-	}
+	rounds = append(rounds, &newRound)
 
 	for _, conn := range connections {
 		if conn.PlayerID == nil {
 			continue
 		}
 
-		g, err := conn.GetActiveGame(client)
+		g, err := conn.GetActiveGame()
 
 		if err != nil {
 			log.Println("get active game:", err)
 			continue
 		}
 
-		if g.ID != gameId {
+		if g.ID != payload.GameID {
 			continue
 		}
 
-		err = conn.SendAllRounds(client)
+		err = conn.SendAllRounds()
 		if err != nil {
 			log.Println("send all rounds:", err)
 			continue
 		}
 
-		err = conn.SendCurrentRound(client)
+		err = conn.SendCurrentRound()
 		if err != nil {
 			log.Println("send current round:", err)
 			continue
 		}
 
-		err = conn.SendAllGames(client)
+		err = conn.SendAllGames()
 		if err != nil {
 			log.Println("send all games:", err)
 			continue
 		}
 
-		err = conn.SendConnectedPlayers(client)
+		err = conn.SendConnectedPlayers()
 		if err != nil {
 			log.Println("send connected users:", err)
 		}
 
-		err = conn.SendAllAnswers(client)
+		err = conn.SendAllAnswers()
 		if err != nil {
 			log.Println("send all answers:", err)
 		}
 
-		err = conn.SendRoundState(client)
+		err = conn.SendRoundState()
 		if err != nil {
 			log.Println("send round state:", err)
 		}
 
-		err = conn.SendCurrentText(client)
+		err = conn.SendCurrentText()
 		if err != nil {
 			log.Println("send current text:", err)
 		}
@@ -1382,8 +1089,8 @@ func (c *Connection) GoNextRound(msg SocketMessage, client *mongo.Client) error 
 	return nil
 }
 
-func (c *Connection) SendCurrentGame(client *mongo.Client) error {
-	game, err := c.GetActiveGame(client)
+func (c *Connection) SendCurrentGame() error {
+	game, err := c.GetActiveGame()
 
 	if err != nil {
 		log.Println("get active game:", err)
@@ -1419,8 +1126,8 @@ func (c *Connection) SendCurrentGame(client *mongo.Client) error {
 	return nil
 }
 
-func (c *Connection) SendRoundState(client *mongo.Client) error {
-	round, err := c.GetActiveRound(client)
+func (c *Connection) SendRoundState() error {
+	round, err := c.GetActiveRound()
 
 	if err != nil {
 		log.Println("get active round:", err)
@@ -1456,21 +1163,18 @@ func (c *Connection) SendRoundState(client *mongo.Client) error {
 	return nil
 }
 
-func (c *Connection) StartRound(client *mongo.Client) error {
-	round, err := c.GetActiveRound(client)
+func (c *Connection) StartRound() error {
+	round, err := c.GetActiveRound()
 	if err != nil {
 		log.Println("get active round:", err)
 		return err
 	}
 
-	coll := client.Database("league").Collection("rounds")
-	filter := bson.D{{Key: "_id", Value: round.ID}}
-	update := bson.D{{Key: "$set", Value: bson.D{{Key: "started", Value: true}, {Key: "ended", Value: false}}}}
-
-	_, err = coll.UpdateOne(context.TODO(), filter, update)
-	if err != nil {
-		log.Println("update one:", err)
-		return err
+	for _, r := range rounds {
+		if r.ID == round.ID {
+			r.Started = true
+			r.Ended = false
+		}
 	}
 
 	for _, conn := range connections {
@@ -1478,7 +1182,7 @@ func (c *Connection) StartRound(client *mongo.Client) error {
 			continue
 		}
 
-		err := conn.SendRoundState(client)
+		err := conn.SendRoundState()
 
 		if err != nil {
 			log.Println("send round state:", err)
@@ -1488,21 +1192,18 @@ func (c *Connection) StartRound(client *mongo.Client) error {
 	return nil
 }
 
-func (c *Connection) EndRound(client *mongo.Client) error {
-	round, err := c.GetActiveRound(client)
+func (c *Connection) EndRound() error {
+	round, err := c.GetActiveRound()
 	if err != nil {
 		log.Println("get active round:", err)
 		return err
 	}
 
-	coll := client.Database("league").Collection("rounds")
-	filter := bson.D{{Key: "_id", Value: round.ID}}
-	update := bson.D{{Key: "$set", Value: bson.D{{Key: "started", Value: false}, {Key: "ended", Value: true}}}}
-
-	_, err = coll.UpdateOne(context.TODO(), filter, update)
-	if err != nil {
-		log.Println("update one:", err)
-		return err
+	for _, r := range rounds {
+		if r.ID == round.ID {
+			r.Ended = true
+			r.Started = false
+		}
 	}
 
 	for _, conn := range connections {
@@ -1510,7 +1211,7 @@ func (c *Connection) EndRound(client *mongo.Client) error {
 			continue
 		}
 
-		err := conn.SendRoundState(client)
+		err := conn.SendRoundState()
 
 		if err != nil {
 			log.Println("send round state:", err)
@@ -1520,20 +1221,12 @@ func (c *Connection) EndRound(client *mongo.Client) error {
 	return nil
 }
 
-func (c *Connection) DeleteAnswer(msg SocketMessage, client *mongo.Client) error {
-	answerId, err := primitive.ObjectIDFromHex(msg.Payload)
-	if err != nil {
-		log.Println("object id from hex:", err)
-		return err
-	}
-
-	answerColl := client.Database("league").Collection("answers")
-	filter := bson.D{{Key: "_id", Value: answerId}}
-
-	_, err = answerColl.DeleteOne(context.TODO(), filter)
-	if err != nil {
-		log.Println("delete one:", err)
-		return err
+func (c *Connection) DeleteAnswer(msg SocketMessage) error {
+	for i, a := range answers {
+		if a.ID == msg.Payload {
+			answers = append(answers[:i], answers[i+1:]...)
+			break
+		}
 	}
 
 	for _, conn := range connections {
@@ -1541,7 +1234,7 @@ func (c *Connection) DeleteAnswer(msg SocketMessage, client *mongo.Client) error
 			continue
 		}
 
-		err := conn.SendAllAnswers(client)
+		err := conn.SendAllAnswers()
 
 		if err != nil {
 			log.Println("send all answers:", err)
@@ -1551,60 +1244,30 @@ func (c *Connection) DeleteAnswer(msg SocketMessage, client *mongo.Client) error
 	return nil
 }
 
-func (c *Connection) DeleteGame(msg SocketMessage, client *mongo.Client) error {
-	gameId, err := primitive.ObjectIDFromHex(msg.Payload)
-	if err != nil {
-		log.Println("object id from hex:", err)
-		return err
-	}
-
-	player, err := c.GetPlayer(client)
+func (c *Connection) DeleteGame(msg SocketMessage) error {
+	player, err := c.GetPlayer()
 	if err != nil {
 		log.Println("get player:", err)
 		return err
 	}
 
-	coll := client.Database("league").Collection("games")
-	filter := bson.D{{Key: "_id", Value: gameId}}
-
-	var game Game
-	err = coll.FindOne(context.TODO(), filter).Decode(&game)
-	if err != nil {
-		log.Println("find one:", err)
-		return err
+	for i, g := range games {
+		if g.ID == msg.Payload && g.ModeratorUUID == player.ID {
+			games = append(games[:i], games[i+1:]...)
+			break
+		}
 	}
 
-	if game.ModeratorUUID != player.ID {
-		return fmt.Errorf("player is not moderator")
-	}
-
-	_, err = coll.DeleteOne(context.TODO(), filter)
-	if err != nil {
-		log.Println("delete one:", err)
-		return err
-	}
-
-	roundsColl := client.Database("league").Collection("rounds")
-	filter = bson.D{{Key: "gameId", Value: gameId}}
-
-	_, err = roundsColl.DeleteMany(context.TODO(), filter)
-	if err != nil {
-		log.Println("delete many:", err)
-		return err
-	}
-
-	answerColl := client.Database("league").Collection("answers")
-	filter = bson.D{{Key: "gameId", Value: gameId}}
-
-	_, err = answerColl.DeleteMany(context.TODO(), filter)
-	if err != nil {
-		log.Println("delete many:", err)
-		return err
+	for i, a := range answers {
+		if a.GameID == msg.Payload {
+			answers = append(answers[:i], answers[i+1:]...)
+			break
+		}
 	}
 
 	msg = SocketMessage{
 		Type:    "game_deleted",
-		Payload: gameId.Hex(),
+		Payload: msg.Payload,
 	}
 
 	data, err := json.Marshal(msg)
@@ -1624,7 +1287,7 @@ func (c *Connection) DeleteGame(msg SocketMessage, client *mongo.Client) error {
 			continue
 		}
 
-		err := conn.SendAllGames(client)
+		err := conn.SendAllGames()
 		if err != nil {
 			log.Println("send all games:", err)
 		}
@@ -1633,11 +1296,11 @@ func (c *Connection) DeleteGame(msg SocketMessage, client *mongo.Client) error {
 	return nil
 }
 
-func (c *Connection) Listen(client *mongo.Client) {
+func (c *Connection) Listen() {
 	for {
 		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
-			c.Remove(client)
+			c.Remove()
 			break
 		}
 
@@ -1645,165 +1308,165 @@ func (c *Connection) Listen(client *mongo.Client) {
 
 		if err != nil {
 			log.Println("parse:", err)
-			c.Remove(client)
+			c.Remove()
 			break
 		}
 
 		switch msg.Type {
 		case "create_game":
-			err := c.CreateGame(msg, client)
+			err := c.CreateGame(msg)
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "leave_game":
-			err := c.LeaveGame(msg, client)
+			err := c.LeaveGame(msg)
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "get_text":
-			err := c.SendCurrentText(client)
+			err := c.SendCurrentText()
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "get_round":
-			err := c.SendRound(client)
+			err := c.SendRound()
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "join_game":
-			err := c.JoinGame(msg, client)
+			err := c.JoinGame(msg)
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "set_answer":
-			err := c.SetAnswer(msg, client)
+			err := c.SetAnswer(msg)
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "set_text":
-			err := c.SetText(msg, client)
+			err := c.SetText(msg)
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "set_answer_visible":
-			err := c.RevealAnswer(msg, client)
+			err := c.RevealAnswer(msg)
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "set_answer_invisible":
-			err := c.HideAnswer(msg, client)
+			err := c.HideAnswer(msg)
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "get_connected_players":
-			err := c.SendConnectedPlayers(client)
+			err := c.SendConnectedPlayers()
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "end_round":
-			err := c.EndRound(client)
+			err := c.EndRound()
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "start_round":
-			err := c.StartRound(client)
+			err := c.StartRound()
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "get_rounds":
-			err := c.SendAllRounds(client)
+			err := c.SendAllRounds()
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "delete_answer":
-			err := c.DeleteAnswer(msg, client)
+			err := c.DeleteAnswer(msg)
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "delete_game":
-			err := c.DeleteGame(msg, client)
+			err := c.DeleteGame(msg)
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "go_next_round":
-			err := c.GoNextRound(msg, client)
+			err := c.GoNextRound(msg)
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "get_game":
-			err := c.SendCurrentGame(client)
+			err := c.SendCurrentGame()
 
 			if err != nil {
-				c.Remove(client)
+				c.Remove()
 				break
 			}
 		case "say_hello":
-			err := c.SayHello(msg, client)
+			err := c.SayHello(msg)
 			if err != nil {
 				log.Println("say hello:", err)
 			}
 
-			err = c.SendAllGames(client)
+			err = c.SendAllGames()
 			if err != nil {
 				log.Println("send all games:", err)
 			}
 
-			err = c.SendConnectedPlayers(client)
+			err = c.SendConnectedPlayers()
 			if err != nil {
 				log.Println("send connected users:", err)
 			}
 
-			err = c.SendAllRounds(client)
+			err = c.SendAllRounds()
 			if err != nil {
 				log.Println("send all rounds:", err)
 			}
 
-			err = c.SendCurrentRound(client)
+			err = c.SendCurrentRound()
 			if err != nil {
 				log.Println("send current round:", err)
 			}
 
-			err = c.SendCurrentText(client)
+			err = c.SendCurrentText()
 			if err != nil {
 				log.Println("send current text:", err)
 			}
 
-			err = c.SendCurrentGame(client)
+			err = c.SendCurrentGame()
 			if err != nil {
 				log.Println("send current game:", err)
 			}
 
-			err = c.SendAllAnswers(client)
+			err = c.SendAllAnswers()
 			if err != nil {
 				log.Println("send all answers:", err)
 			}

@@ -1,13 +1,13 @@
 package main
 
-import (
-	"log"
-
-	"go.mongodb.org/mongo-driver/bson/primitive"
-)
+import ()
 
 var (
 	connections []*Connection = []*Connection{}
+	games       []*Game       = []*Game{}
+	rounds      []*GameRound  = []*GameRound{}
+	players     []*Player     = []*Player{}
+	answers     []*Answer     = []*Answer{}
 )
 
 type AllAnswer struct {
@@ -28,47 +28,39 @@ type SocketMessage struct {
 }
 
 type Player struct {
-	ID       primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Nickname string             `json:"nickname"`
+	ID       string `json:"id"`
+	Nickname string `json:"nickname"`
 }
 
 type Game struct {
-	ID            primitive.ObjectID   `bson:"_id,omitempty" json:"id"`
-	Name          string               `bson:"name" json:"name"`
-	ModeratorUUID primitive.ObjectID   `bson:"moderatorId" json:"moderatorId"`
-	Players       []primitive.ObjectID `bson:"players" json:"players"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	ModeratorUUID string   `json:"moderatorId"`
+	Players       []string `json:"players"`
 }
 
 type GameRound struct {
-	ID       primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	GameID   primitive.ObjectID `bson:"gameId" json:"gameId"`
-	Round    int                `bson:"round" json:"round"`
-	Active   bool               `bson:"active" json:"active"`
-	Question string             `bson:"question" json:"question"`
-	Answers  []Answer           `bson:"answers" json:"answers"`
-	Started  bool               `bson:"started" json:"started"`
-	Ended    bool               `bson:"ended" json:"ended"`
+	ID       string   `json:"id"`
+	GameID   string   `json:"gameId"`
+	Round    int      `json:"round"`
+	Active   bool     `json:"active"`
+	Question string   `json:"question"`
+	Answers  []Answer `json:"answers"`
+	Started  bool     `json:"started"`
+	Ended    bool     `json:"ended"`
 }
 
 type Answer struct {
-	ID                primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	GameID            primitive.ObjectID `bson:"gameId" json:"gameId"`
-	PlayerID          primitive.ObjectID `bson:"playerId" json:"playerId"`
-	RoundID           primitive.ObjectID `bson:"roundId" json:"roundId"`
-	Text              string             `bson:"text" json:"text"`
-	RevealedToPlayers bool               `bson:"revealedToPlayers" json:"revealedToPlayers"`
+	ID                string `json:"id"`
+	GameID            string `json:"gameId"`
+	PlayerID          string `json:"playerId"`
+	RoundID           string `json:"roundId"`
+	Text              string `json:"text"`
+	RevealedToPlayers bool   `json:"revealedToPlayers"`
 }
 
 func main() {
-	client, err := InitDatabase()
-
-	if err != nil {
-		log.Fatalf("Failed to connect to database: %s", err)
-	}
-
-	defer DisconnectDatabase(client)
-
-	router := NewServer(client)
+	router := NewServer()
 
 	router.GET("/ws", router.HandleWebsocket)
 	router.GET("/game/:id", router.GetGameById)
