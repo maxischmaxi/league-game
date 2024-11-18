@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-contrib/cors"
+	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -18,6 +19,8 @@ type Server struct {
 
 func NewServer() *Server {
 	server := gin.New()
+
+	server.Use(gzip.Gzip(gzip.DefaultCompression))
 
 	server.Use(cors.New(cors.Config{
 		AllowOrigins:    []string{"https://league-game.up.railway.app", "http://localhost:5173"},
