@@ -1,7 +1,5 @@
 package main
 
-import ()
-
 var (
 	connections []*Connection = []*Connection{}
 	games       []*Game       = []*Game{}
@@ -10,53 +8,41 @@ var (
 	answers     []*Answer     = []*Answer{}
 )
 
-type AllAnswer struct {
-	UUID           string `json:"uuid"`
-	Nick           string `json:"nickname"`
-	Answer         string `json:"answer"`
-	AnswerRevealed bool   `json:"answerRevealed"`
-}
-
-type SetPreviewdPayload struct {
-	GameId  string `json:"gameId"`
-	Preview bool   `json:"preview"`
-}
-
 type SocketMessage struct {
 	Type    string `json:"type"`
 	Payload string `json:"payload"`
 }
 
 type Player struct {
-	ID       string `json:"id"`
-	Nickname string `json:"nickname"`
+	ID       string `bson:"id" json:"id"`
+	Nickname string `bson:"nickname" json:"nickname"`
 }
 
 type Game struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	ModeratorUUID string   `json:"moderatorId"`
-	Players       []string `json:"players"`
+	ID            string   `bson:"id" json:"id"`
+	Name          string   `bson:"name" json:"name"`
+	ModeratorUUID string   `bson:"moderatorId" json:"moderatorId"`
+	Players       []string `bson:"players" json:"players"`
 }
 
 type GameRound struct {
-	ID       string   `json:"id"`
-	GameID   string   `json:"gameId"`
-	Round    int      `json:"round"`
-	Active   bool     `json:"active"`
-	Question string   `json:"question"`
-	Answers  []Answer `json:"answers"`
-	Started  bool     `json:"started"`
-	Ended    bool     `json:"ended"`
+	ID       string   `bson:"id" json:"id"`
+	GameID   string   `bson:"gameId" json:"gameId"`
+	Round    int      `bson:"round" json:"round"`
+	Active   bool     `bson:"active" json:"active"`
+	Question string   `bson:"question" json:"question"`
+	Answers  []Answer `bson:"answers" json:"answers"`
+	Started  bool     `bson:"started" json:"started"`
+	Ended    bool     `bson:"ended" json:"ended"`
 }
 
 type Answer struct {
-	ID                string `json:"id"`
-	GameID            string `json:"gameId"`
-	PlayerID          string `json:"playerId"`
-	RoundID           string `json:"roundId"`
-	Text              string `json:"text"`
-	RevealedToPlayers bool   `json:"revealedToPlayers"`
+	ID                string `bson:"id" json:"id"`
+	GameID            string `bson:"gameId" json:"gameId"`
+	PlayerID          string `bson:"playerId" json:"playerId"`
+	RoundID           string `bson:"roundId" json:"roundId"`
+	Text              string `bson:"text" json:"text"`
+	RevealedToPlayers bool   `bson:"revealedToPlayers" json:"revealedToPlayers"`
 }
 
 func main() {

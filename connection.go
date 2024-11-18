@@ -152,7 +152,6 @@ func (c *Connection) SendPlayerConnectedToAll(game Game, player Player) error {
 }
 
 func (c *Connection) HandleGameNotFound() error {
-
 	answer := SocketMessage{
 		Type:    "join_game",
 		Payload: "false",
@@ -173,65 +172,66 @@ func (c *Connection) HandleGameNotFound() error {
 	return nil
 }
 
-func (c *Connection) JoinGame(msg SocketMessage) error {
+func (c *Connection) JoinGame(msg SocketMessage) {
 	player, err := c.GetPlayer()
 	if err != nil {
 		log.Println("get player:", err)
-		return err
+		return
 	}
 
 	game, err := FindGameById(msg.Payload)
 
 	if err != nil {
 		log.Println("find one:", err)
-		return err
+		return
 	}
 
 	players := append(game.Players, *c.PlayerID)
+
 	err = UpdateGamePlayers(game.ID, players)
 	if err != nil {
 		log.Println("update game players:", err)
-		return err
+		return
 	}
 
 	err = c.SendJoinSuccess(*game)
 	if err != nil {
 		log.Println("send join success:", err)
-		return err
+		return
 	}
 
 	err = c.SendPlayerConnectedToAll(*game, *player)
 	if err != nil {
 		log.Println("send player connected to all:", err)
-		return err
+		return
 	}
 
-	return c.SendAllAnswers()
+	c.SendAllAnswers()
 }
 
-func (c *Connection) SendAllAnswers() error {
+func (c *Connection) SendAllAnswers() {
 	game, err := c.GetActiveGame()
 	if err != nil {
 		log.Println("get active game:", err)
-		return err
+		return
 	}
 
 	round, err := c.GetActiveRound()
 	if err != nil {
 		log.Println("get active round:", err)
-		return err
+		return
 	}
 
 	answers, err := FindAllAnswersByGameAndRound(game.ID, round.ID)
 	if err != nil {
 		log.Println("find all answers by game and round:", err)
-		return err
+		return
 	}
 
 	data, err := json.Marshal(answers)
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	response := SocketMessage{
@@ -243,17 +243,15 @@ func (c *Connection) SendAllAnswers() error {
 
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(responseData))
 
 	if err != nil {
 		log.Println("write:", err)
-		return err
+		return
 	}
-
-	return nil
 }
 
 func (c *Connection) UnhandledMessage(msg SocketMessage) {
@@ -337,11 +335,11 @@ func (c *Connection) GetActiveGame() (*Game, error) {
 	return &playerGames[0], nil
 }
 
-func (c *Connection) SendConnectedPlayers() error {
+func (c *Connection) SendConnectedPlayers() {
 	game, err := c.GetActiveGame()
 	if err != nil {
 		log.Println("SEND_CONNECTED_PLAYERS: get active game:", err)
-		return err
+		return
 	}
 
 	playerIds := []string{}
@@ -379,7 +377,7 @@ func (c *Connection) SendConnectedPlayers() error {
 
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	answer := SocketMessage{
@@ -391,7 +389,7 @@ func (c *Connection) SendConnectedPlayers() error {
 
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(data))
@@ -399,8 +397,6 @@ func (c *Connection) SendConnectedPlayers() error {
 	if err != nil {
 		log.Println("write:", err)
 	}
-
-	return nil
 }
 
 type SayHelloPayload struct {
@@ -408,104 +404,86 @@ type SayHelloPayload struct {
 	UUID string `json:"uuid"`
 }
 
-func (c *Connection) SayHello(msg SocketMessage) error {
+func (c *Connection) SayHello(msg SocketMessage) {
 	var payload SayHelloPayload
-
 	err := json.Unmarshal([]byte(msg.Payload), &payload)
 	if err != nil {
 		log.Println("unmarshal:", err)
-		return err
+		return
 	}
 
-	if payload.UUID != "" {
-		var player Player
+	fmt.Println("Player connected:", payload)
 
-		for _, p := range players {
-			if p.ID == payload.UUID {
-				p.Nickname = payload.Name
-				c.PlayerID = &payload.UUID
-				player = *p
-				break
-			}
+	if payload.UUID == "" {
+		fmt.Println("player uuid is empty", payload.UUID)
+
+		newPlayer := Player{
+			Nickname: payload.Name,
+			ID:       uuid.New().String(),
 		}
 
-		if player.ID == "" {
-			return fmt.Errorf("player not found")
-		}
+		players = append(players, &newPlayer)
+		c.PlayerID = &newPlayer.ID
 
-		playerGames := []Game{}
-		for _, g := range games {
-			for _, p := range g.Players {
-				if p == payload.UUID {
-					playerGames = append(playerGames, *g)
-				}
-			}
-		}
+		c.SendPlayerConnected(newPlayer)
+		c.SendSetUuid()
+		c.SendCurrentGame()
+		c.SendAllAnswers()
+		c.SendAllGames()
+		c.SendAllRounds()
+		c.SendConnectedPlayers()
+		c.SendCurrentText()
 
-		if len(playerGames) == 0 {
-			return nil
-		}
-
-		if len(playerGames) > 1 {
-			return nil
-		}
-
-		data, err := json.Marshal(player)
-		if err != nil {
-			log.Println("marshal:", err)
-			return err
-		}
-
-		msg := SocketMessage{
-			Type:    "player_connected",
-			Payload: string(data),
-		}
-
-		data, err = json.Marshal(msg)
-
-		if err != nil {
-			log.Println("marshal:", err)
-			return err
-		}
-
-		for _, conn := range connections {
-			if conn.PlayerID == nil {
-				continue
-			}
-
-			if conn.PlayerID == c.PlayerID {
-				continue
-			}
-
-			err := conn.Conn.WriteMessage(websocket.TextMessage, []byte(data))
-
-			if err != nil {
-				log.Println("write:", err)
-			}
-		}
-
-		return nil
+		return
 	}
 
-	newPlayer := Player{
-		Nickname: payload.Name,
-		ID:       uuid.New().String(),
+	var player Player
+	found := false
+
+	for _, p := range players {
+		if p.ID == payload.UUID {
+			player = *p
+			found = true
+
+			p.Nickname = payload.Name
+			c.PlayerID = &payload.UUID
+
+			break
+		}
 	}
 
-	players = append(players, &newPlayer)
+	if !found {
+		player = Player{
+			Nickname: payload.Name,
+			ID:       uuid.New().String(),
+		}
 
-	c.PlayerID = &newPlayer.ID
+		c.PlayerID = &player.ID
+		players = append(players, &player)
 
+		c.SendSetUuid()
+	}
+
+	c.SendPlayerConnected(player)
+	c.SendCurrentGame()
+	c.SendAllAnswers()
+	c.SendAllGames()
+	c.SendAllRounds()
+	c.SendConnectedPlayers()
+	c.SendCurrentText()
+}
+
+func (c *Connection) SendSetUuid() {
 	answer := SocketMessage{
 		Type:    "set_uuid",
-		Payload: newPlayer.ID,
+		Payload: *c.PlayerID,
 	}
 
 	data, err := json.Marshal(answer)
 
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(data))
@@ -513,22 +491,53 @@ func (c *Connection) SayHello(msg SocketMessage) error {
 	if err != nil {
 		log.Println("write:", err)
 	}
-
-	return nil
 }
 
-func (c *Connection) SetAnswer(msg SocketMessage) error {
+func (c *Connection) SendPlayerConnected(player Player) {
+	data, err := json.Marshal(player)
+	if err != nil {
+		return
+	}
+
+	msg := SocketMessage{
+		Type:    "player_connected",
+		Payload: string(data),
+	}
+
+	data, err = json.Marshal(msg)
+	if err != nil {
+		return
+	}
+
+	for _, conn := range connections {
+		if c.PlayerID == nil {
+			continue
+		}
+
+		if c.PlayerID == &player.ID {
+			continue
+		}
+
+		err := conn.Conn.WriteMessage(websocket.TextMessage, []byte(data))
+
+		if err != nil {
+			fmt.Println("write:", err)
+		}
+	}
+}
+
+func (c *Connection) SetAnswer(msg SocketMessage) {
 	player, err := c.GetPlayer()
 	if err != nil {
 		log.Println("get player:", err)
-		return err
+		return
 	}
 
 	round, err := c.GetActiveRound()
 
 	if err != nil {
 		log.Println("get active round:", err)
-		return err
+		return
 	}
 
 	found := false
@@ -555,14 +564,10 @@ func (c *Connection) SetAnswer(msg SocketMessage) error {
 				continue
 			}
 
-			err := conn.SendAllAnswers()
-
-			if err != nil {
-				log.Println("send all answers:", err)
-			}
+			conn.SendAllAnswers()
 		}
 
-		return nil
+		return
 	}
 
 	for _, conn := range connections {
@@ -570,22 +575,16 @@ func (c *Connection) SetAnswer(msg SocketMessage) error {
 			continue
 		}
 
-		err := conn.SendAllAnswers()
-
-		if err != nil {
-			log.Println("send all answers:", err)
-		}
+		conn.SendAllAnswers()
 	}
-
-	return nil
 }
 
-func (c *Connection) SetText(msg SocketMessage) error {
+func (c *Connection) SetText(msg SocketMessage) {
 	round, err := c.GetActiveRound()
 
 	if err != nil {
 		log.Println("get active round:", err)
-		return err
+		return
 	}
 
 	for _, r := range rounds {
@@ -599,26 +598,20 @@ func (c *Connection) SetText(msg SocketMessage) error {
 			continue
 		}
 
-		err := conn.SendCurrentText()
-
-		if err != nil {
-			log.Println("send current text:", err)
-		}
+		conn.SendCurrentText()
 	}
-
-	return nil
 }
 
-func (c *Connection) SendCurrentText() error {
+func (c *Connection) SendCurrentText() {
 	if c.PlayerID == nil {
-		return fmt.Errorf("player id is nil")
+		return
 	}
 
 	round, err := c.GetActiveRound()
 
 	if err != nil {
 		log.Println("get active round:", err)
-		return err
+		return
 	}
 
 	msg := SocketMessage{
@@ -629,18 +622,21 @@ func (c *Connection) SendCurrentText() error {
 	data, err := json.Marshal(msg)
 
 	if err != nil {
-		return err
+		return
 	}
 
-	return c.Conn.WriteMessage(websocket.TextMessage, []byte(data))
+	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(data))
+	if err != nil {
+		fmt.Printf("Failed to write message: %s\n", err)
+	}
 }
 
-func (c *Connection) LeaveGame(msg SocketMessage) error {
+func (c *Connection) LeaveGame(msg SocketMessage) {
 	player, err := c.GetPlayer()
 
 	if err != nil {
 		log.Println("get player:", err)
-		return err
+		return
 	}
 
 	for _, g := range games {
@@ -663,7 +659,7 @@ func (c *Connection) LeaveGame(msg SocketMessage) error {
 
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	for _, conn := range connections {
@@ -682,30 +678,7 @@ func (c *Connection) LeaveGame(msg SocketMessage) error {
 		}
 	}
 
-	data, err = json.Marshal(games)
-	if err != nil {
-		log.Println("marshal:", err)
-		return err
-	}
-
-	answer = SocketMessage{
-		Type:    "get_games",
-		Payload: string(data),
-	}
-
-	data, err = json.Marshal(answer)
-	if err != nil {
-		log.Println("marshal:", err)
-		return err
-	}
-
-	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(data))
-	if err != nil {
-		log.Println("write:", err)
-		return err
-	}
-
-	return nil
+	c.SendAllGames()
 }
 
 type SetCanTypePayload struct {
@@ -720,7 +693,7 @@ type AnswerPayload struct {
 	RoundID string `json:"roundId"`
 }
 
-func ChangeAnswerVisibility(msg SocketMessage, visible bool) error {
+func ChangeAnswerVisibility(msg SocketMessage, visible bool) {
 	for _, a := range answers {
 		if a.ID == msg.Payload {
 			a.RevealedToPlayers = visible
@@ -733,30 +706,24 @@ func ChangeAnswerVisibility(msg SocketMessage, visible bool) error {
 			continue
 		}
 
-		err := conn.SendAllAnswers()
-
-		if err != nil {
-			log.Println("send all answers:", err)
-		}
+		conn.SendAllAnswers()
 	}
-
-	return nil
 }
 
-func (c *Connection) HideAnswer(msg SocketMessage) error {
-	return ChangeAnswerVisibility(msg, false)
+func (c *Connection) HideAnswer(msg SocketMessage) {
+	ChangeAnswerVisibility(msg, false)
 }
 
-func (c *Connection) RevealAnswer(msg SocketMessage) error {
-	return ChangeAnswerVisibility(msg, true)
+func (c *Connection) RevealAnswer(msg SocketMessage) {
+	ChangeAnswerVisibility(msg, true)
 }
 
-func (c *Connection) CreateGame(msg SocketMessage) error {
+func (c *Connection) CreateGame(msg SocketMessage) {
 	player, err := c.GetPlayer()
 
 	if err != nil {
 		log.Println("CREATE_GAME: get player:", err)
-		return err
+		return
 	}
 
 	game := Game{
@@ -765,8 +732,6 @@ func (c *Connection) CreateGame(msg SocketMessage) error {
 		ModeratorUUID: player.ID,
 		ID:            uuid.New().String(),
 	}
-
-	games = append(games, &game)
 
 	round := GameRound{
 		ID:       uuid.New().String(),
@@ -777,100 +742,50 @@ func (c *Connection) CreateGame(msg SocketMessage) error {
 		Question: "",
 	}
 
+	games = append(games, &game)
 	rounds = append(rounds, &round)
 
-	data, err := json.Marshal(game)
-	if err != nil {
-		log.Println("marshal:", err)
-		return err
+	for _, g := range games {
+		if g.ID != game.ID {
+			for i, p := range g.Players {
+				if p == player.ID {
+					g.Players = append(g.Players[:i], g.Players[i+1:]...)
+					break
+				}
+			}
+		}
 	}
 
-	answer := SocketMessage{
-		Type:    "create_game",
-		Payload: string(data),
-	}
-
-	data, err = json.Marshal(answer)
-
-	if err != nil {
-		log.Println("marshal:", err)
-		return err
-	}
-
-	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(data))
-
-	if err != nil {
-		log.Println("write:", err)
-		return err
-	}
+	c.SendAllGames()
+	c.SendAllRounds()
+	c.SendCurrentGame()
+	c.SendAllAnswers()
+	c.SendCurrentText()
+	c.SendConnectedPlayers()
 
 	for _, conn := range connections {
 		if conn.PlayerID == nil {
 			continue
 		}
 
-		err = c.SendAllGames()
-
-		if err != nil {
-			log.Println("send all games:", err)
+		if conn.PlayerID == c.PlayerID {
+			continue
 		}
 
-		err := conn.SendRound()
-
-		if err != nil {
-			log.Println("send round:", err)
-		}
+		conn.SendAllGames()
+		conn.SendAllRounds()
+		conn.SendCurrentGame()
+		conn.SendAllAnswers()
+		conn.SendCurrentText()
+		conn.SendConnectedPlayers()
 	}
-
-	return nil
 }
 
-func (c *Connection) SendRound() error {
-	game, err := c.GetActiveGame()
-	if err != nil {
-		log.Println("get active game:", err)
-		return err
-	}
-
-	for _, r := range rounds {
-		if r.GameID == game.ID && r.Active {
-			data, err := json.Marshal(r)
-			if err != nil {
-				log.Println("marshal:", err)
-				return err
-			}
-
-			answer := SocketMessage{
-				Type:    "get_round",
-				Payload: string(data),
-			}
-
-			responseData, err := json.Marshal(answer)
-
-			if err != nil {
-				log.Println("marshal:", err)
-				return err
-			}
-
-			err = c.Conn.WriteMessage(websocket.TextMessage, []byte(responseData))
-
-			if err != nil {
-				log.Println("write:", err)
-				return err
-			}
-
-			return nil
-		}
-	}
-
-	return fmt.Errorf("round not found")
-}
-
-func (c *Connection) SendAllGames() error {
+func (c *Connection) SendAllGames() {
 	data, err := json.Marshal(games)
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	response := SocketMessage{
@@ -882,25 +797,23 @@ func (c *Connection) SendAllGames() error {
 
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(responseData))
 
 	if err != nil {
 		log.Println("write:", err)
-		return err
+		return
 	}
-
-	return nil
 }
 
-func (c *Connection) SendAllRounds() error {
+func (c *Connection) SendAllRounds() {
 	game, err := c.GetActiveGame()
 
 	if err != nil {
 		log.Println("get active game:", err)
-		return err
+		return
 	}
 
 	responseRounds := []GameRound{}
@@ -915,7 +828,7 @@ func (c *Connection) SendAllRounds() error {
 
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	answer := SocketMessage{
@@ -927,74 +840,32 @@ func (c *Connection) SendAllRounds() error {
 
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(responseData))
 
 	if err != nil {
 		log.Println("write:", err)
-		return err
+		return
 	}
-
-	return nil
-}
-
-func (c *Connection) SendCurrentRound() error {
-	round, err := c.GetActiveRound()
-
-	if err != nil {
-		log.Println("get active round:", err)
-		return err
-	}
-
-	data, err := json.Marshal(round)
-
-	if err != nil {
-		log.Println("marshal:", err)
-		return err
-	}
-
-	answer := SocketMessage{
-		Type:    "get_round",
-		Payload: string(data),
-	}
-
-	responseData, err := json.Marshal(answer)
-
-	if err != nil {
-		log.Println("marshal:", err)
-		return err
-	}
-
-	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(responseData))
-
-	if err != nil {
-		log.Println("write:", err)
-		return err
-	}
-
-	return nil
 }
 
 type JoinGamePayload struct {
-	GameID  string `json:"gameId"`
-	RoundID string `json:"roundId"`
+	GameID string `json:"gameId"`
 }
 
-func (c *Connection) GoNextRound(msg SocketMessage) error {
+func (c *Connection) GoNextRound(msg SocketMessage) {
 	player, err := c.GetPlayer()
 
 	if err != nil {
-		return err
+		return
 	}
 
 	var payload JoinGamePayload
-
 	err = json.Unmarshal([]byte(msg.Payload), &payload)
-
 	if err != nil {
-		return err
+		return
 	}
 
 	found := false
@@ -1003,7 +874,7 @@ func (c *Connection) GoNextRound(msg SocketMessage) error {
 	for _, g := range games {
 		if g.ID == payload.GameID && g.ModeratorUUID == player.ID {
 			for _, r := range rounds {
-				if r.ID == payload.RoundID {
+				if r.Active {
 					r.Active = false
 					r.Ended = true
 					r.Started = false
@@ -1016,7 +887,8 @@ func (c *Connection) GoNextRound(msg SocketMessage) error {
 	}
 
 	if !found {
-		return fmt.Errorf("game not found")
+		fmt.Println("Game or round not found")
+		return
 	}
 
 	newRound := GameRound{
@@ -1027,6 +899,7 @@ func (c *Connection) GoNextRound(msg SocketMessage) error {
 		Round:    nextRound,
 		Started:  false,
 		Ended:    false,
+		ID:       uuid.New().String(),
 	}
 
 	rounds = append(rounds, &newRound)
@@ -1047,61 +920,27 @@ func (c *Connection) GoNextRound(msg SocketMessage) error {
 			continue
 		}
 
-		err = conn.SendAllRounds()
-		if err != nil {
-			log.Println("send all rounds:", err)
-			continue
-		}
-
-		err = conn.SendCurrentRound()
-		if err != nil {
-			log.Println("send current round:", err)
-			continue
-		}
-
-		err = conn.SendAllGames()
-		if err != nil {
-			log.Println("send all games:", err)
-			continue
-		}
-
-		err = conn.SendConnectedPlayers()
-		if err != nil {
-			log.Println("send connected users:", err)
-		}
-
-		err = conn.SendAllAnswers()
-		if err != nil {
-			log.Println("send all answers:", err)
-		}
-
-		err = conn.SendRoundState()
-		if err != nil {
-			log.Println("send round state:", err)
-		}
-
-		err = conn.SendCurrentText()
-		if err != nil {
-			log.Println("send current text:", err)
-		}
+		conn.SendAllRounds()
+		conn.SendAllGames()
+		conn.SendConnectedPlayers()
+		conn.SendAllAnswers()
+		conn.SendCurrentText()
 	}
-
-	return nil
 }
 
-func (c *Connection) SendCurrentGame() error {
+func (c *Connection) SendCurrentGame() {
 	game, err := c.GetActiveGame()
 
 	if err != nil {
 		log.Println("get active game:", err)
-		return err
+		return
 	}
 
 	data, err := json.Marshal(game)
 
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	answer := SocketMessage{
@@ -1113,61 +952,22 @@ func (c *Connection) SendCurrentGame() error {
 
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(responseData))
 
 	if err != nil {
 		log.Println("write:", err)
-		return err
+		return
 	}
-
-	return nil
 }
 
-func (c *Connection) SendRoundState() error {
-	round, err := c.GetActiveRound()
-
-	if err != nil {
-		log.Println("get active round:", err)
-		return err
-	}
-
-	data, err := json.Marshal(round)
-
-	if err != nil {
-		log.Println("marshal:", err)
-		return err
-	}
-
-	answer := SocketMessage{
-		Type:    "get_round",
-		Payload: string(data),
-	}
-
-	responseData, err := json.Marshal(answer)
-
-	if err != nil {
-		log.Println("marshal:", err)
-		return err
-	}
-
-	err = c.Conn.WriteMessage(websocket.TextMessage, []byte(responseData))
-
-	if err != nil {
-		log.Println("write:", err)
-		return err
-	}
-
-	return nil
-}
-
-func (c *Connection) StartRound() error {
+func (c *Connection) StartRound() {
 	round, err := c.GetActiveRound()
 	if err != nil {
 		log.Println("get active round:", err)
-		return err
+		return
 	}
 
 	for _, r := range rounds {
@@ -1182,21 +982,15 @@ func (c *Connection) StartRound() error {
 			continue
 		}
 
-		err := conn.SendRoundState()
-
-		if err != nil {
-			log.Println("send round state:", err)
-		}
+		conn.SendAllRounds()
 	}
-
-	return nil
 }
 
-func (c *Connection) EndRound() error {
+func (c *Connection) EndRound() {
 	round, err := c.GetActiveRound()
 	if err != nil {
 		log.Println("get active round:", err)
-		return err
+		return
 	}
 
 	for _, r := range rounds {
@@ -1211,17 +1005,11 @@ func (c *Connection) EndRound() error {
 			continue
 		}
 
-		err := conn.SendRoundState()
-
-		if err != nil {
-			log.Println("send round state:", err)
-		}
+		conn.SendAllRounds()
 	}
-
-	return nil
 }
 
-func (c *Connection) DeleteAnswer(msg SocketMessage) error {
+func (c *Connection) DeleteAnswer(msg SocketMessage) {
 	for i, a := range answers {
 		if a.ID == msg.Payload {
 			answers = append(answers[:i], answers[i+1:]...)
@@ -1234,21 +1022,15 @@ func (c *Connection) DeleteAnswer(msg SocketMessage) error {
 			continue
 		}
 
-		err := conn.SendAllAnswers()
-
-		if err != nil {
-			log.Println("send all answers:", err)
-		}
+		conn.SendAllAnswers()
 	}
-
-	return nil
 }
 
-func (c *Connection) DeleteGame(msg SocketMessage) error {
+func (c *Connection) DeleteGame(msg SocketMessage) {
 	player, err := c.GetPlayer()
 	if err != nil {
 		log.Println("get player:", err)
-		return err
+		return
 	}
 
 	for i, g := range games {
@@ -1273,7 +1055,7 @@ func (c *Connection) DeleteGame(msg SocketMessage) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		log.Println("marshal:", err)
-		return err
+		return
 	}
 
 	for _, conn := range connections {
@@ -1287,13 +1069,8 @@ func (c *Connection) DeleteGame(msg SocketMessage) error {
 			continue
 		}
 
-		err := conn.SendAllGames()
-		if err != nil {
-			log.Println("send all games:", err)
-		}
+		conn.SendAllGames()
 	}
-
-	return nil
 }
 
 func (c *Connection) Listen() {
@@ -1314,162 +1091,39 @@ func (c *Connection) Listen() {
 
 		switch msg.Type {
 		case "create_game":
-			err := c.CreateGame(msg)
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.CreateGame(msg)
 		case "leave_game":
-			err := c.LeaveGame(msg)
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.LeaveGame(msg)
 		case "get_text":
-			err := c.SendCurrentText()
-
-			if err != nil {
-				c.Remove()
-				break
-			}
-		case "get_round":
-			err := c.SendRound()
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.SendCurrentText()
 		case "join_game":
-			err := c.JoinGame(msg)
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.JoinGame(msg)
 		case "set_answer":
-			err := c.SetAnswer(msg)
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.SetAnswer(msg)
 		case "set_text":
-			err := c.SetText(msg)
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.SetText(msg)
 		case "set_answer_visible":
-			err := c.RevealAnswer(msg)
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.RevealAnswer(msg)
 		case "set_answer_invisible":
-			err := c.HideAnswer(msg)
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.HideAnswer(msg)
 		case "get_connected_players":
-			err := c.SendConnectedPlayers()
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.SendConnectedPlayers()
 		case "end_round":
-			err := c.EndRound()
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.EndRound()
 		case "start_round":
-			err := c.StartRound()
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.StartRound()
 		case "get_rounds":
-			err := c.SendAllRounds()
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.SendAllRounds()
 		case "delete_answer":
-			err := c.DeleteAnswer(msg)
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.DeleteAnswer(msg)
 		case "delete_game":
-			err := c.DeleteGame(msg)
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.DeleteGame(msg)
 		case "go_next_round":
-			err := c.GoNextRound(msg)
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.GoNextRound(msg)
 		case "get_game":
-			err := c.SendCurrentGame()
-
-			if err != nil {
-				c.Remove()
-				break
-			}
+			c.SendCurrentGame()
 		case "say_hello":
-			err := c.SayHello(msg)
-			if err != nil {
-				log.Println("say hello:", err)
-			}
-
-			err = c.SendAllGames()
-			if err != nil {
-				log.Println("send all games:", err)
-			}
-
-			err = c.SendConnectedPlayers()
-			if err != nil {
-				log.Println("send connected users:", err)
-			}
-
-			err = c.SendAllRounds()
-			if err != nil {
-				log.Println("send all rounds:", err)
-			}
-
-			err = c.SendCurrentRound()
-			if err != nil {
-				log.Println("send current round:", err)
-			}
-
-			err = c.SendCurrentText()
-			if err != nil {
-				log.Println("send current text:", err)
-			}
-
-			err = c.SendCurrentGame()
-			if err != nil {
-				log.Println("send current game:", err)
-			}
-
-			err = c.SendAllAnswers()
-			if err != nil {
-				log.Println("send all answers:", err)
-			}
+			c.SayHello(msg)
 		default:
 			c.UnhandledMessage(msg)
 		}

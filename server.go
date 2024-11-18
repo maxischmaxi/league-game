@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -72,6 +73,15 @@ func (s *Server) RunWithLogs() {
 }
 
 func (s *Server) HandleWebsocket(c *gin.Context) {
+	cookie, err := c.Request.Cookie("uuid")
+	var playerId *string
+
+	if err != nil {
+		fmt.Printf("Failed to get cookie: %s\n", err)
+	} else {
+		playerId = &cookie.Value
+	}
+
 	conn, err := s.Upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		err := c.AbortWithError(http.StatusInternalServerError, err)
@@ -88,7 +98,7 @@ func (s *Server) HandleWebsocket(c *gin.Context) {
 
 	con := Connection{
 		Conn:     conn,
-		PlayerID: nil,
+		PlayerID: playerId,
 	}
 
 	connections = append(connections, &con)
